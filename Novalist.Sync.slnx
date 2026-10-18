@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Novalist.Sync.Contracts/Novalist.Sync.Contracts.csproj" />
+    <Project Path="src/Novalist.Sync.Server/Novalist.Sync.Server.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Novalist.Sync.Contracts.Tests/Novalist.Sync.Contracts.Tests.csproj" />
+    <Project Path="tests/Novalist.Sync.Server.Tests/Novalist.Sync.Server.Tests.csproj" />
+  </Folder>
+</Solution>
