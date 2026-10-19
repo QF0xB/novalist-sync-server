@@ -4,6 +4,8 @@ public static class Protocol
 {
     public const byte Version = 1;
     public const string HubPath = "/sync";
+    public const string DevicesPath = "/devices";
+    public const string DeviceIdParameter = "deviceId";
 }
 
 public enum MsgType : byte
