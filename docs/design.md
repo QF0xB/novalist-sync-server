@@ -479,7 +479,9 @@ Roles per membership:
       a valid session could claim another device ID of the same user, so
       revoking it would not lock it out. Devices should prove possession of
       their Ed25519 key (server challenge, signature verified against the stored
-      public key, rule 7) before build step 6 is done.
+      public key, rule 7) before build step 6 is done. Consider deriving
+      `deviceId` from the Ed25519 public key (e.g. the first 16 bytes of its
+      SHA-256), so a device ID cannot be claimed without the private key.
 - [ ] **Roles on the client:** a viewer holds the epoch keys and can sign valid
       updates, and a compromised server could relay them. Clients must reject
       updates from viewer devices too, which needs a member/role list the server
@@ -492,6 +494,14 @@ Roles per membership:
 - Ciphertext padding to reduce size leakage.
 - Key transparency to detect key substitution without manual verification.
 - Re-encrypting blobs on member removal.
+- **Multiple server instances.** v1 runs as a single instance: live broadcasts
+  and cutting off open connections on revocation (rule 4) only reach
+  connections on the same instance, tracked in an in-memory registry. Scaling
+  out needs a Redis backplane for SignalR (broadcasts and group changes across
+  instances), revocation published as an event that every instance applies to
+  its own local registry, and sticky sessions at the load balancer. Revocation
+  and broadcasting each go through a single place in the code, so this only
+  replaces those two.
 
 ## 14. Build order
 
