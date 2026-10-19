@@ -417,10 +417,10 @@ MIME types and keys are only visible inside the encrypted manifest.
 
 | Table          | Contents                                                       | Server can read? |
 | -------------- | -------------------------------------------------------------- | ---------------- |
-| `users`        | account, credentials                                           | yes              |
+| `users`        | OIDC issuer + subject, email, username (§10.1)                 | yes              |
 | `devices`      | deviceId, userId, public keys, linking signature, `isRecovery` | public keys only |
 | `projects`     | projectId, current epoch, epoch start time                     | yes              |
-| `memberships`  | projectId, userId, role                                        | yes              |
+| `memberships`  | projectId, userId, role (owner, contributor, viewer)           | yes              |
 | `wrapped_keys` | §6.3 records                                                   | no               |
 | `updates`      | serverSeq, header, nonce, ciphertext, signature                | header only      |
 | `snapshots`    | coversServerSeq, timestamp, envelope                           | header only      |
@@ -428,6 +428,26 @@ MIME types and keys are only visible inside the encrypted manifest.
 
 Visible metadata: project and item counts, member lists, devices, timestamps,
 edit frequency per item, sizes.
+
+Project names, item names and paths are **not** stored in `projects` or anywhere
+else on the server; they live in the encrypted structure doc (§5.1).
+
+### 10.1 Accounts and login
+
+Users log in through an external OIDC provider (Keycloak, authentik). The server
+stores no passwords. A user is identified by the token's issuer and `sub` claim,
+which never change; email and username are optional, refreshed from the token's
+claims, and only used to find people when inviting them (§8.5).
+
+OIDC authenticates the **user**, not the device. Until devices authenticate with
+their own key (§12), the server only checks that the device ID a connection
+claims belongs to the logged-in user.
+
+Roles per membership:
+
+- **owner:** adds and removes members, rotates epochs, edits
+- **contributor:** edits
+- **viewer:** reads only; the server rejects pushes from viewer devices
 
 ## 11. Decision log
 
@@ -443,6 +463,7 @@ edit frequency per item, sizes.
 | D8  | Version history         | Tiered snapshots: hourly 24 h, daily 30 d, weekly after                                        |
 | D9  | Snapshot trigger        | Every 500 updates per item, or on project close                                                |
 | D10 | Forward secrecy         | Not in v1 (rationale §1); rotation + compaction instead                                        |
+| D11 | Login                   | External OIDC provider (Keycloak, authentik); users identified by issuer + subject (§10.1)     |
 
 ## 12. Open questions
 
@@ -454,6 +475,15 @@ edit frequency per item, sizes.
 - [ ] Exact Y.XmlFragment schema for the scene editor's block and inline formats
       (needs a read of the editor and sanitizer code).
 - [ ] Mobile (`Novalist.Mobile`) support later?
+- [ ] **Device authentication:** OIDC only proves the user. A stolen device with
+      a valid session could claim another device ID of the same user, so
+      revoking it would not lock it out. Devices should prove possession of
+      their Ed25519 key (server challenge, signature verified against the stored
+      public key, rule 7) before build step 6 is done.
+- [ ] **Roles on the client:** a viewer holds the epoch keys and can sign valid
+      updates, and a compromised server could relay them. Clients must reject
+      updates from viewer devices too, which needs a member/role list the server
+      cannot forge (e.g. signed by an owner).
 
 ## 13. Future work
 
