@@ -17,3 +17,11 @@ the minor version.
   order).
 - `UnsupportedProtocolVersionException`, thrown by `EnvelopeHeader.Parse` for
   an unknown `protoVersion`.
+- `Envelope` record: raw header bytes, nonce, ciphertext and signature, all
+  opaque `byte[]`.
+- `SequencedEnvelope` record: an `Envelope` with the `ServerSeq` the server
+  assigned.
+- `Protocol.HubPath` (`/sync`), the path of the SignalR hub.
+- `ISyncHub` (client → server): `JoinProject`, `Push` (returns the assigned
+  `serverSeq`) and `CatchUp` (streams every update after `afterServerSeq`).
+- `ISyncClient` (server → client): `ReceiveUpdate`.
