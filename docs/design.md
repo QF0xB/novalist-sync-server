@@ -281,9 +281,19 @@ header = protoVersion(1) || msgType(1) || projectId(16) || itemId(16)
          || epoch(4) || senderDeviceId(16) || senderSeq(8)
 ```
 
-`msgType` ∈ { update, snapshot, presence }. `itemId` is a random GUID, so the
-server learns _that_ an item exists and how often it changes, but not what it
-is.
+The header is 62 bytes. `msgType` ∈ { update = 1, snapshot = 2, presence = 3 };
+0 and all other values are invalid. `itemId` is a random GUID, so the server
+learns _that_ an item exists and how often it changes, but not what it is.
+
+Encoding rules:
+
+- Integers (`epoch` as uint32, `senderSeq` as uint64) are **big-endian**.
+- IDs (`projectId`, `itemId`, `senderDeviceId`) are **random UUIDv4**, written in
+  RFC 9562 (big-endian) byte order. Not UUIDv7: its embedded timestamp would
+  tell the server when each item, project or device was created.
+- A receiver checks `protoVersion` **before** anything else, including the
+  length, and rejects unsupported versions instead of parsing them with the
+  current layout.
 
 ```
 nonce      = random(24)

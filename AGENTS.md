@@ -113,15 +113,18 @@ If a task seems to require breaking one of these rules, stop and ask instead.
 `Novalist.Sync.Contracts` is consumed by the Novalist fork as a NuGet package,
 so changes here are API changes.
 
-- Contracts contain **only** records, enums, constants and the hub interface. No
-  logic, no dependencies beyond the BCL.
+- Contracts contain **only** records, enums, constants, exceptions, the hub
+  interface and pure wire encoding/decoding (e.g. `EnvelopeHeader.WriteTo` /
+  `Parse`). No other logic, no dependencies beyond the BCL. Encoding lives here
+  so client and server share one implementation of the bytes that are encrypted
+  and signed over.
 - Byte layouts (the envelope header in design.md §7) must match the spec
   exactly. Add a test for any layout change.
-- **Breaking wire changes bump `ProtocolVersion`** and the package major
+- **Breaking wire changes bump `Protocol.Version`** and the package major
   version. Additive changes bump minor.
 - The server must reject messages with an unsupported `protoVersion` with a
   clear error, not misparse them.
-- Update `CHANGELOG.md` for every Contracts change.
+- Update `src/Novalist.Sync.Contracts/CHANGELOG.md` for every Contracts change.
 
 ## Code conventions
 
