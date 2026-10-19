@@ -25,6 +25,9 @@
         pass = "novalist";
       }
     ];
+    # Integration tests create and drop a fresh database per test run.
+    # Runs only when the data directory is first initialized.
+    initialScript = "ALTER ROLE novalist CREATEDB;";
   };
 
   # A stable path for IDEs: Rider needs the real SDK folder (with sdk/ next to
