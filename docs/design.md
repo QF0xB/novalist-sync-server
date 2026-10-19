@@ -1,6 +1,6 @@
 # Novalist Sync — Design
 
-Status: draft v0.3 · Last updated: 2026-10-19
+Status: draft v0.4 · Last updated: 2026-10-19
 
 ## 1. Goal
 
@@ -48,10 +48,28 @@ Facts the design has to fit (as of v3.6, with the fork on .NET 10):
   (`editor-content.js`). The editor DOM also carries **presentation**: grammar
   highlights, pagination wrappers, display URLs for images. Codex sections use
   CodeMirror (Markdown). No Yjs or collaboration code exists.
-- **Storage:** a project is a plain folder. Scenes are **HTML** files, entities
-  and metadata are **JSON**, images and research files sit alongside. Scene
-  identity is a one-line comment in each file; chapter identity is a hidden
-  folder marker. Per-project settings live in `.novalist/`.
+- **Storage:** a project is a plain folder, mostly **JSON**, with images and
+  research files alongside:
+  - **Scenes** are `.novalist` files (`Chapters/<chapter>/scene-01.novalist`):
+    a one-line identity comment with the scene ID (front matter), followed by
+    the scene's **HTML**. The core strips the comment when reading and stamps it
+    back on every save, so the editor only ever sees the HTML.
+  - **Structure:** `draft.json` per book draft, `scenes.json` (which scenes, in
+    which order, per chapter), and a hidden `.nvchapter.json` marker in every
+    chapter folder for chapter identity.
+  - **Codex entries** (characters, locations, items, lore) are one JSON file
+    per entry (`<id>.json` in `Characters/`, `Locations/`, `Items/`, `Lore/`).
+    Their long-form sections are Markdown text stored inside that JSON
+    (`{ "title", "content", … }`), which is what CodeMirror edits.
+  - **Boards, maps and other tools** are JSON files of their own (`<id>.json`),
+    plus small files such as `scratchpad.json`.
+  - **Project settings** live in `.novalist/` (`project.json`,
+    `settings.json`).
+  - **Images and attachments** are ordinary files.
+  - **Derived and local data** sits in the folder too: `Snapshots/`, word
+    history, analysis caches, `.nvindex.json` index files.
+  - `.md` files only appear as an import source (Obsidian vaults,
+    manuscripts), not as Novalist's own format.
 - **Filesystem is the source of truth:** Novalist reconciles outside changes on
   open and live while running.
 - Built-in **Git** client, automatic **ZIP backups**, per-scene **snapshots**.
@@ -86,6 +104,11 @@ Accepted limitations:
   already must today.
 - **The editor and the Yjs host hold plaintext.** They have to: they show and
   merge the document. They never receive keys, ciphertext or signatures (§4.3).
+- **The server can try to guess a user's sync password offline**, because it
+  stores the password-encrypted key bundle (§6.5). Expensive Argon2id
+  parameters and enforced passphrase length make this slow, not impossible: a
+  weak password is the weakest point of an account. Without a sync password
+  there is nothing to guess.
 
 ## 4. Architecture
 
@@ -187,12 +210,27 @@ One shared project = one **sync space** with one member list and one key
 hierarchy. Inside it, every item is its own CRDT document (a Yjs `Y.Doc`),
 identified by a random 128-bit `itemId`:
 
-| Item kind                                                                  | CRDT shape                                                                                                                                                                                           | On disk                                 |
-| -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
-| **Structure** (one per project)                                            | Y.Map/Y.Array: books, drafts, acts, chapters, scene order, metadata                                                                                                                                  | chapter folders + markers, project JSON |
-| **Scene**                                                                  | Y.XmlFragment mirroring the editor's sanitized block structure (paragraph styles, lists, footnotes, comments; inline formatting as attributes) + Y.Map for synopsis, notes, POV, status, dates, tags | scene `.html`                           |
-| **Codex entry / other JSON** (entities, plotlines, timeline, boards, maps) | Y.Map per file; long-form Markdown sections as Y.Text                                                                                                                                                | `.json` / `.md`                         |
-| **File manifest** (one per project)                                        | Y.Map: relative path → `BlobRef` (§9.2)                                                                                                                                                              | images, research, any other file        |
+| Item kind                                                         | CRDT shape                                                                                                                                                              | On disk                                                    |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| **Structure** (one per project)                                   | Y.Map/Y.Array: books, drafts, chapters, scene order; one Y.Map per scene record (metadata, comment and footnote text)                                                  | `draft.json`, `scenes.json`, `.nvchapter.json` markers, chapter folders, `.novalist/project.json` |
+| **Scene**                                                         | Y.XmlFragment mirroring the editor's sanitized block structure (paragraph styles, lists, footnotes, comments; inline formatting as attributes)                           | `scene-NN.novalist`: identity comment + HTML               |
+| **Codex entry** (character, location, item, lore)                 | Y.Map per entry; each section's Markdown `content` as Y.Text                                                                                                            | `<id>.json` in `Characters/`, `Locations/`, `Items/`, `Lore/` |
+| **Other tools** (boards, maps, scratchpad …)                      | Y.Map per file                                                                                                                                                          | `<id>.json`, `scratchpad.json` …                           |
+| **File manifest** (one per project)                               | Y.Map: relative path → `BlobRef` (§9.2)                                                                                                                                 | images, attachments, any other file                        |
+
+`scenes.json` holds a full record per scene: title, order, synopsis, notes,
+goal, outcome, dates, labels, plotlines, dialogue speakers, and also the
+**comments and footnotes themselves** (`SceneData.Comments`, `.Footnotes`),
+while the scene HTML carries their anchors. In the structure doc each scene's
+record is its own Y.Map, so concurrent edits to different scenes, or different
+fields of one scene, merge field by field. The editor schema (§12) has to keep a
+comment's or footnote's anchor in the scene and its text in the structure doc
+consistent.
+
+The scene's identity comment is **not** part of its `Y.XmlFragment`: it is file
+metadata, which the core keeps stamping on save exactly as today. Derived and
+local data (`Snapshots/`, word history, analysis caches, `.nvindex.json`) is not
+synced; which files exactly count as such is open (§12).
 
 Scenes are only loaded into the Yjs host when opened or when updates for them
 arrive.
@@ -220,8 +258,9 @@ The work is split along the process boundary:
 Directions:
 
 - **Yjs → disk:** after local or remote changes, the Yjs host projects the
-  affected item (debounced, ~500 ms) and .NET writes it. .NET records the hash
-  of what it wrote.
+  affected item (debounced, ~500 ms) and .NET writes it through the existing
+  services, which add the scene's identity comment as they do today. .NET
+  records the hash of what it wrote.
 - **Disk → Yjs:** when the file watcher reports a change whose hash is _not_ one
   it just wrote (an outside edit, a `git pull`, a cloud folder sync), .NET hands
   the new content to the Yjs host, which diffs it against the current projection
@@ -359,8 +398,23 @@ the app-data directory, never inside the project folder** (so Git, backups and
 folder sync never pick them up), encrypted at rest with DPAPI / macOS Keychain /
 libsecret.
 
-New devices of the same user are **linked** by an existing device (QR or pairing
-code), which signs the new device's public keys.
+New devices of the same user are **linked** by something only the user holds,
+never by the server alone (otherwise a malicious server could add its own
+"device" and receive every epoch key). Three ways, all ending with the new
+device's public keys signed and the epoch keys wrapped for it:
+
+- **Sync password** (the default, §6.5): the new device logs in, the user enters
+  the sync password, and the device links itself. No other device is needed.
+- **An existing device, now or later:** the new device registers as _pending_
+  and shows a pairing code. Any existing device of the user that is online, at
+  once or whenever it next comes online, shows the request; once the user
+  confirms the code there, it signs the new device's keys and wraps the epoch
+  keys for it. QR code or pairing code, the two devices need not be online at
+  the same time.
+- **Recovery key** (§6.4), when neither is available.
+
+Another project member cannot link a device for you: they could not tell your
+new device apart from one the server inserted.
 
 **Project epoch keys.** Each project has a sequence of epochs, each with a
 random 32-byte key `EK_e`. Subkeys per purpose:
@@ -380,6 +434,21 @@ K_presence = HKDF(EK_e, salt = projectId, info = "novalist/v1/presence")
 Rotation is a compare-and-set on the server: the first client to submit epoch
 `e+1` wins; a client whose rotation is rejected adopts the winner's epoch. Old
 epoch keys are kept, so history stays readable.
+
+**Updates are always sealed with the current epoch.** A removed member keeps
+every key they ever had, so anything sealed under an old epoch after a rotation
+would still be readable to them. Two rules prevent that:
+
+- **Seal at send time, not when queuing.** The outgoing queue holds plaintext
+  Yjs updates (§5.5). They are sealed only when they are sent, and a client
+  coming back online first learns the project's current epoch and fetches its
+  key. Edits made offline during a rotation are therefore sealed with the new
+  epoch.
+- **The server rejects pushes for any epoch but the current one.** It reads
+  `epoch` from the header (§7), so the check needs no crypto. A client still on
+  an old epoch gets an "outdated epoch" error, fetches the new key, and seals
+  again. Snapshots follow the same rule; catch-up still serves updates from old
+  epochs, which current members can decrypt with the keys they kept.
 
 **Blob keys.** Each blob has its own random 32-byte key, stored inside the
 encrypted file manifest (§9.2).
@@ -420,9 +489,46 @@ keys are automatically wrapped for it — no separate backup to keep in sync.
 
 To recover: on a new installation the user enters the recovery key, the client
 re-derives the recovery device, unwraps the epoch keys, and uses the recovery
-device's signing key to link the new real device. Lose all devices **and** the
-recovery key → data is gone. Anyone holding the recovery key has full access, so
-the UI must say so clearly.
+device's signing key to link the new real device. Lose all devices, the sync
+password **and** the recovery key → synced data is gone (the project files on
+any device that had the project remain). Anyone holding the recovery key has
+full access, so the UI must say so clearly.
+
+### 6.5 Sync password
+
+So that a new device needs neither another device nor the recovery key, the
+user also sets a **sync password** at account setup. It protects a copy of the
+recovery key that the server stores but cannot read:
+
+```
+salt      = random(16)
+pwKey     = Argon2id(syncPassword, salt, params)        // in .NET, never sent
+nonce     = random(24)
+aad       = "novalist/v1/key-bundle" || userId || bundleVersion
+bundle    = XChaCha20Poly1305.Encrypt(pwKey, nonce, recoveryKey, aad)
+stored    = { bundleVersion, salt, params, nonce, bundle }
+```
+
+- **New device:** log in with the identity provider, enter the sync password,
+  download `stored`, derive `pwKey`, decrypt the recovery key, then continue as
+  in §6.4: re-derive the recovery device, unwrap the epoch keys and link the new
+  device with the recovery device's signing key.
+- **Changing the password** re-encrypts only this bundle (new salt, new nonce,
+  higher `bundleVersion`). Project keys, epochs and other devices are not
+  touched. Replacing the bundle is a compare-and-set on `bundleVersion`, like an
+  epoch change.
+- **Forgotten password:** the recovery key still works, and the user sets a new
+  sync password from any linked device.
+- **Strength:** the server holds the bundle, so it can try to guess the
+  password offline (§3). Argon2id parameters are deliberately expensive (memory
+  and time cost high enough that each guess is slow even on dedicated hardware)
+  and stored with the bundle, so they can be raised later. The client enforces a
+  long passphrase and refuses weak ones. Users who want no guessable secret on
+  the server can skip the sync password and rely on device linking and the
+  recovery key alone.
+- The password never leaves the device, and the server never sees `pwKey` or
+  the recovery key. Only the client does this crypto (rule 7 applies to the
+  server).
 
 ## 7. Message format
 
@@ -480,10 +586,10 @@ The project files are not rewritten in the process.
    the Yjs host.
 2. The Yjs host sends it to .NET, which stores it in the local log and the
    outgoing queue in one transaction (§5.5) and acknowledges: the edit is saved.
-3. When sync is online, the client seals it (§7) with `K_update`, increments its
-   `senderSeq`, and pushes it. The server checks membership, assigns
-   `serverSeq`, stores, broadcasts. Once `Push` returns, the update leaves the
-   queue.
+3. When sync is online, the client seals it (§7) with `K_update` of the
+   project's **current** epoch (§6.2), increments its `senderSeq`, and pushes
+   it. The server checks membership and the epoch, assigns `serverSeq`, stores,
+   broadcasts. Once `Push` returns, the update leaves the queue.
 
 Yjs updates merge in any order, so the server's ordering is not needed for
 correctness. `serverSeq` is still what makes delivery durable: acknowledgements,
@@ -549,8 +655,10 @@ positions), sealed with `K_presence` by .NET, broadcast, never stored.
 
 - **Pause:** .NET closes the SignalR connection and stops sending. The project
   stays synced; edits keep being stored and queued (§5.5).
-- **Resume:** .NET reconnects, joins the project, catches up from
-  `lastServerSeq` and sends the queue in `senderSeq` order. Retries are safe:
+- **Resume:** .NET reconnects, joins the project, learns the current epoch
+  (fetching its key if it changed while paused, §6.2), catches up from
+  `lastServerSeq` and sends the queue in `senderSeq` order, sealed with the
+  current epoch. Retries are safe:
   the server returns the stored `serverSeq` for a repeated `senderSeq`.
 
 ### 8.10 Making a local copy
@@ -609,6 +717,7 @@ MIME types and keys are only visible inside the encrypted manifest.
 | `projects`     | projectId, current epoch, epoch start time                     | yes              |
 | `memberships`  | projectId, userId, role (owner, contributor, viewer)           | yes              |
 | `wrapped_keys` | §6.3 records                                                   | no               |
+| `key_bundles`  | §6.5 password-encrypted recovery key, salt, Argon2id params    | no               |
 | `updates`      | serverSeq, header, nonce, ciphertext, signature                | header only      |
 | `snapshots`    | coversServerSeq, timestamp, envelope                           | header only      |
 | `blob_chunks`  | blobId, index, ciphertext                                      | no               |
@@ -670,6 +779,8 @@ Roles per membership:
 | D15 | Durability              | Durable Yjs log + outgoing queue in the .NET client's SQLite; saved = stored in one transaction |
 | D16 | Synced project state    | `Y.Doc` is authoritative, files are its projection; never rebuilt from HTML alone (§5.2)      |
 | D17 | Server-side CRDT        | None: no Hocuspocus, no Node.js server, no server-side merging                                 |
+| D18 | New devices             | Sync password protecting the recovery key (Argon2id, §6.5); also async linking and recovery key |
+| D19 | Epochs and the queue    | Queue holds plaintext, sealed at send time; server rejects pushes for any but the current epoch |
 
 ## 12. Open questions
 
@@ -687,6 +798,12 @@ Roles per membership:
       outside edits?
 - [ ] **Conflict resolution UI** for outside changes that cannot be merged
       (§5.2): how conflict copies are named and shown.
+- [ ] **What is synced:** exactly which files count as derived or local and stay
+      out of sync (`Snapshots/`, word history, analysis caches, `.nvindex.json`,
+      per-device settings), and which project settings are shared.
+- [ ] **Argon2id parameters and passphrase rules** for the sync password
+      (§6.5): concrete memory/time cost per platform, and how strength is
+      measured.
 - [ ] Mobile (`Novalist.Mobile`) support later?
 - [ ] **Device authentication:** OIDC only proves the user. A stolen device with
       a valid session could claim another device ID of the same user, so
@@ -745,7 +862,7 @@ default until the binding is validated.
    3. Enable sync and make local copy (§8.1, §8.10).
    4. Encryption with a single epoch key, sealed envelopes.
    5. Identity keys, device authentication, wrapping, signatures, membership,
-      safety numbers.
+      safety numbers, sync password and asynchronous device linking.
    6. Whole project: structure doc, Codex, file manifest + blobs.
    7. Snapshots, compaction, tiered retention.
    8. Epochs: removal, revocation, monthly rotation.
