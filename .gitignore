@@ -4,6 +4,7 @@ obj/
 artifacts/
 *.nupkg
 *.snupkg
+.nuget-feed/
 
 # Test results and coverage
 TestResults/

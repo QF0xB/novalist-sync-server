@@ -63,7 +63,12 @@ dotnet ef database update --project src/Novalist.Sync.Server
 
 # contracts package
 dotnet pack src/Novalist.Sync.Contracts -c Release
+contracts-pack                                 # pack a fresh local prerelease into ../.nuget-feed
 ```
+
+For cross-repository development with the Novalist fork, see
+[`docs/local-packages.md`](docs/local-packages.md). The local feed is not used
+by CI or published releases.
 
 The connection string for local development and tests comes from environment
 variables set in `devenv.nix`. Never hard-code credentials in
