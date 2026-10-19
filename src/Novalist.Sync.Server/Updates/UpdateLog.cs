@@ -30,6 +30,8 @@ public sealed class UpdateLog(SyncDbContext db)
         // One statement: bumping the project's counter and inserting the update
         // either both happen or neither does, so serverSeq has no gaps. The UPDATE
         // locks the project row, which queues concurrent pushes to the same project.
+        // Don't compose further LINQ onto this query (e.g. SingleAsync): EF would then
+        // wrap the INSERT in a subquery, which PostgreSQL rejects.
         try
         {
             var assigned = await db.Database
