@@ -443,6 +443,19 @@ OIDC authenticates the **user**, not the device. Until devices authenticate with
 their own key (§12), the server only checks that the device ID a connection
 claims belongs to the logged-in user.
 
+The server is pointed at the provider through configuration (environment
+variables, never `appsettings*.json`):
+
+- `Authentication__Schemes__Bearer__Authority`: the issuer URL, e.g.
+  `https://keycloak.example.com/realms/novalist`. Signing keys are fetched from
+  its `.well-known/openid-configuration`.
+- `Authentication__Schemes__Bearer__ValidAudiences__0`: the audience the
+  provider puts into access tokens for this server, e.g. `novalist-sync`.
+
+Outside Development the server refuses to start without both. Access tokens are
+only accepted in the `Authorization` header, never in the URL, so they cannot
+end up in access logs.
+
 Roles per membership:
 
 - **owner:** adds and removes members, rotates epochs, edits
@@ -481,7 +494,9 @@ Roles per membership:
       their Ed25519 key (server challenge, signature verified against the stored
       public key, rule 7) before build step 6 is done. Consider deriving
       `deviceId` from the Ed25519 public key (e.g. the first 16 bytes of its
-      SHA-256), so a device ID cannot be claimed without the private key.
+      SHA-256). That binds the ID to one key, so it cannot be registered with
+      a different key, but it does not prove possession: anyone can hash a
+      public key, so the challenge is still required.
 - [ ] **Roles on the client:** a viewer holds the epoch keys and can sign valid
       updates, and a compromised server could relay them. Clients must reject
       updates from viewer devices too, which needs a member/role list the server

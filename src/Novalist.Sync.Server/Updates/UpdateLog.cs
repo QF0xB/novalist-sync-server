@@ -10,7 +10,7 @@ public sealed class UpdateLog(SyncDbContext db)
 {
     private const string SenderSeqIndex = "ix_updates_project_id_sender_device_id_sender_seq";
 
-    public async Task<long> AppendAsync(Envelope envelope, CancellationToken cancellationToken)
+    public async Task<long> AppendAsync(Guid userId, Envelope envelope, CancellationToken cancellationToken)
     {
         var header = EnvelopeHeader.Parse(envelope.Header);
 
@@ -27,6 +27,9 @@ public sealed class UpdateLog(SyncDbContext db)
         var senderSeq = (long)header.SenderSeq;
         long epoch = header.Epoch;
 
+        var owner = (int)MembershipRole.Owner;
+        var contributor = (int)MembershipRole.Contributor;
+
         // One statement: bumping the project's counter and inserting the update
         // either both happen or neither does, so serverSeq has no gaps. The UPDATE
         // locks the project row, which queues concurrent pushes to the same project.
@@ -36,10 +39,18 @@ public sealed class UpdateLog(SyncDbContext db)
         {
             var assigned = await db.Database
                 .SqlQuery<long>($"""
-                                 WITH seq AS (
+                                 WITH writer AS (
+                                    SELECT 1
+                                    FROM memberships
+                                    WHERE project_id = {header.ProjectId}
+                                        AND user_id = {userId}
+                                        AND role IN ({owner}, {contributor})
+                                    FOR SHARE
+                                 ),
+                                 seq AS (
                                     UPDATE projects
                                     SET last_server_seq = last_server_seq + 1
-                                    WHERE id = {header.ProjectId}
+                                    WHERE id = {header.ProjectId} AND EXISTS (SELECT 1 FROM writer)
                                     RETURNING last_server_seq
                                  )
                                  INSERT INTO updates (
@@ -54,10 +65,9 @@ public sealed class UpdateLog(SyncDbContext db)
                                  """).ToListAsync(cancellationToken);
             return assigned.Count == 1
                 ? assigned[0]
-                : throw new PushRejectedException($"Project {header.ProjectId} does not exist.");
+                : throw new PushRejectedException($"No write access to project {header.ProjectId}.");
         }
-        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation
-                                           && ex.ConstraintName == SenderSeqIndex)
+        catch (PostgresException ex) when (ex is { SqlState: PostgresErrorCodes.UniqueViolation, ConstraintName: SenderSeqIndex })
         {
             return await ResolveDuplicateAsync(header, senderSeq, envelope, cancellationToken);
         }

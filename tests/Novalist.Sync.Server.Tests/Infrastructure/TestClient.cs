@@ -34,8 +34,13 @@ public sealed class TestClient : IAsyncDisposable
 
     public Task<Exception?> Closed => _closed.Task.WaitAsync(Timeout);
 
-    public async Task<SequencedEnvelope> NextUpdateAsync() =>
-        await _updates.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask().WaitAsync(Timeout);
+    // The timeout cancels the read itself, so a timed-out call cannot swallow a later update.
+    public async Task<SequencedEnvelope> NextUpdateAsync()
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        timeout.CancelAfter(Timeout);
+        return await _updates.Reader.ReadAsync(timeout.Token);
+    }
 
     public bool TryTakeUpdate(out SequencedEnvelope? update) => _updates.Reader.TryRead(out update);
 

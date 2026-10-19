@@ -26,6 +26,21 @@ builder.Services
     .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options => options.MapInboundClaims = false);
 
+if (!builder.Environment.IsDevelopment())
+{
+    builder.Services
+        .AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme)
+        .Validate(
+            options => !string.IsNullOrEmpty(options.Authority),
+            "Authentication:Schemes:Bearer:Authority must be set in non-development environments.")
+        .Validate(
+            options => !string.IsNullOrEmpty(options.Audience)
+                       || options.TokenValidationParameters.ValidAudiences?.Any() == true,
+            "Authentication:Schemes:Bearer:ValidAudiences must be set in non-development environments."
+        )
+        .ValidateOnStart();
+}
+
 builder.Services
     .AddSignalR(options => options.AddFilter<ClientErrorFilter>())
     .AddMessagePackProtocol();

@@ -101,7 +101,7 @@ public sealed class SyncHub(
         await EnsureDeviceActiveAsync(cancellationToken);
         await projects.EnsureCanWriteAsync(UserId, header.ProjectId, cancellationToken);
 
-        var serverSeq = await updateLog.AppendAsync(envelope, cancellationToken);
+        var serverSeq = await updateLog.AppendAsync(UserId, envelope, cancellationToken);
 
         await Clients.OthersInGroup(ProjectGroup(header.ProjectId))
             .ReceiveUpdate(new SequencedEnvelope(serverSeq, envelope));

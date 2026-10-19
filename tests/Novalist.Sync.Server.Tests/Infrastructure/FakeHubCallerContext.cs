@@ -7,7 +7,9 @@ namespace Novalist.Sync.Server.Tests.Infrastructure;
 // A stand-in for a SignalR connection that only records whether it was aborted.
 public sealed class FakeHubCallerContext : HubCallerContext
 {
-    public bool Aborted { get; private set; }
+    private readonly CancellationTokenSource _aborted = new();
+
+    public bool Aborted => _aborted.IsCancellationRequested;
 
     public override string ConnectionId { get; } = Guid.NewGuid().ToString();
 
@@ -19,7 +21,8 @@ public sealed class FakeHubCallerContext : HubCallerContext
 
     public override IFeatureCollection Features { get; } = new FeatureCollection();
 
-    public override CancellationToken ConnectionAborted => CancellationToken.None;
+    // Like a real connection, aborting cancels ConnectionAborted.
+    public override CancellationToken ConnectionAborted => _aborted.Token;
 
-    public override void Abort() => Aborted = true;
+    public override void Abort() => _aborted.Cancel();
 }

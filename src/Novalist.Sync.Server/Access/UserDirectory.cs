@@ -32,13 +32,7 @@ public sealed class UserDirectory(SyncDbContext db)
             db.Users.Add(user);
         }
 
-        // Unverified emails are not stored: they will be used to find people for
-        // invites, and anyone can put someone else's email into their profile.
-        user.Email = principal.FindFirstValue("email_verified") == "true"
-            ? principal.FindFirstValue("email")
-            : null;
-
-        user.UserName = principal.FindFirstValue("preferred_username");
+        RefreshProfile(user, principal);
 
         try
         {
@@ -53,8 +47,23 @@ public sealed class UserDirectory(SyncDbContext db)
         {
             // Two connections of a new user raced to create it; the other one won.
             db.ChangeTracker.Clear();
-            return await db.Users.SingleAsync(u => u.Issuer == issuer && u.Subject == subject, cancellationToken);
+            var existing = await db.Users.SingleAsync(u => u.Issuer == issuer && u.Subject == subject, cancellationToken);
+            RefreshProfile(existing, principal);
+            await db.SaveChangesAsync(cancellationToken);
+            return existing;
         }
+    }
+
+
+    // Unverified emails are not stored: they will be used to find people for
+    // invites, and anyone can put someone else's email into their profile.
+    private static void RefreshProfile(User user, ClaimsPrincipal principal)
+    {
+        user.Email = principal.FindFirstValue("email_verified") == "true"
+            ? principal.FindFirstValue("email")
+            : null;
+
+        user.UserName = principal.FindFirstValue("preferred_username");
     }
 
 }

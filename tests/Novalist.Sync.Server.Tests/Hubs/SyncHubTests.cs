@@ -445,11 +445,14 @@ public sealed class SyncHubTests(DatabaseFixture database) : IAsyncDisposable
 
         // Guards against a capture that silently sees nothing: the hub's own push logs must be there.
         Assert.Contains(_server.Logs.Entries, e => e.Category == typeof(SyncHub).FullName && e.Values.Contains(projectId));
+        Assert.Contains(_server.Logs.Entries, e => e.ScopeValues.Count > 0);
         foreach (var entry in _server.Logs.Entries)
         {
-            var text = entry.Message + entry.Exception;
+            var text = entry.Message + entry.Exception + entry.ScopeText;
             Assert.DoesNotContain(payloads, payload => text.Contains(payload, StringComparison.Ordinal));
-            Assert.DoesNotContain(entry.Values, value => value is byte[] or Envelope or SequencedEnvelope);
+            Assert.DoesNotContain(
+                entry.Values.Concat(entry.ScopeValues),
+                value => value is byte[] or Envelope or SequencedEnvelope);
         }
     }
 

@@ -20,6 +20,7 @@ public class ConnectionRegistryTests
 
         Assert.True(first.Aborted);
         Assert.True(second.Aborted);
+        Assert.True(first.ConnectionAborted.IsCancellationRequested);
         Assert.False(otherDevice.Aborted);
     }
 
@@ -49,11 +50,17 @@ public class ConnectionRegistryTests
     }
 
     [Fact]
-    public void Remove_UnknownConnection_DoesNothing()
+    public void Remove_UnknownConnection_LeavesOthersUntouched()
     {
+        var userId = Guid.NewGuid();
+        var deviceId = Guid.NewGuid();
+        var existing = Add(userId, deviceId);
+
         _registry.Remove("never-added");
 
-        Assert.Empty(_registry.ConnectionIdsOf(Guid.NewGuid()));
+        Assert.Equivalent(new[] { existing.ConnectionId }, _registry.ConnectionIdsOf(userId), strict: true);
+        _registry.AbortDevice(deviceId);
+        Assert.True(existing.Aborted);
     }
 
     [Fact]
