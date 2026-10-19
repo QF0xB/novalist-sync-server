@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: cachix/install-nix-action@v31
+
+      - uses: cachix/cachix-action@v16
+        with:
+          name: devenv
+
+      - name: Install devenv
+        run: nix profile add nixpkgs#devenv
+
+      - name: Build
+        run: devenv shell -- dotnet build -c Release --warnaserror
+
+      - name: Check formatting
+        run: devenv shell -- dotnet format --verify-no-changes --no-restore
+
+      - name: Start PostgreSQL
+        run: devenv up -d
+
+      - name: Wait for PostgreSQL
+        run: |
+          devenv shell -- bash -euc '
+            for attempt in {1..60}; do
+              if PGPASSWORD=novalist psql \
+                --host=127.0.0.1 \
+                --port=5432 \
+                --username=novalist \
+                --dbname=novalist_sync \
+                --command="SELECT 1" >/dev/null 2>&1; then
+                exit 0
+              fi
+              sleep 1
+            done
+            >&2 echo "PostgreSQL did not become ready"
+            exit 1
+          '
+
+      - name: Run tests
+        run: devenv shell -- dotnet test -c Release --no-build
+
+      - name: Stop services
+        if: always()
+        run: devenv down
