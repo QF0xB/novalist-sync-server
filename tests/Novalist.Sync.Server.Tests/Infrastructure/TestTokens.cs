@@ -2,6 +2,7 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Tokens;
+using Novalist.Sync.Server.Access;
 
 namespace Novalist.Sync.Server.Tests.Infrastructure;
 
@@ -21,7 +22,8 @@ public static class TestTokens
         string? userName = null,
         string issuer = Issuer,
         SecurityKey? signingKey = null,
-        DateTime? expires = null)
+        DateTime? expires = null,
+        IReadOnlyDictionary<string, object>? additionalClaims = null)
     {
         var claims = new Dictionary<string, object> { ["sub"] = subject };
         if (email is not null)
@@ -34,6 +36,8 @@ public static class TestTokens
         {
             claims["preferred_username"] = userName;
         }
+        if (additionalClaims is not null)
+            foreach (var claim in additionalClaims) claims[claim.Key] = claim.Value;
 
         var now = DateTime.UtcNow;
         var expiresAt = expires ?? now.AddMinutes(10);
@@ -49,6 +53,15 @@ public static class TestTokens
             SigningCredentials = new SigningCredentials(signingKey ?? SigningKey, SecurityAlgorithms.HmacSha256),
         });
     }
+
+    public static string Enrollment(string subject, byte[] signingPublicKey) => Create(subject, additionalClaims: EnrollmentClaims(signingPublicKey));
+
+    public static Dictionary<string, object> EnrollmentClaims(byte[] signingPublicKey) => new()
+    {
+        ["amr"] = new[] { "mfa" },
+        ["auth_time"] = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+        ["cnf"] = new Dictionary<string, object> { ["jkt"] = DeviceEnrollmentPolicy.SigningKeyThumbprint(signingPublicKey) }
+    };
 
     // The principal the JwtBearer middleware builds from a valid token, for service tests.
     public static ClaimsPrincipal Principal(params (string Type, string Value)[] claims) =>

@@ -16,6 +16,10 @@ public sealed class Device
     public Guid UserId { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset? RevokedAt { get; set; }
+    public byte[]? SigningPublicKey { get; set; }
+    public byte[]? ReceivingPublicKey { get; set; }
+    public Guid? LinkedByDeviceId { get; set; }
+    public byte[]? LinkingSignature { get; set; }
 }
 
 public sealed class Project
@@ -55,3 +59,20 @@ public sealed class StoredUpdate
     public byte[] Signature { get; set; } = [];
     public DateTimeOffset ReceivedAt { get; set; }
 }
+
+public sealed class Invitation
+{
+    public Guid Id { get; set; }
+    public Guid ProjectId { get; set; }
+    public DateTimeOffset ExpiresAt { get; set; }
+    public Guid? RedeemedBy { get; set; }
+    public Guid? ActivatedDeviceId { get; set; }
+    public byte[]? CertificateHash { get; set; }
+}
+
+
+
+
+
+
+

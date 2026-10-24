@@ -8,25 +8,29 @@ using Novalist.Sync.Server.Updates;
 namespace Novalist.Sync.Server.Hubs;
 
 [Authorize]
-public sealed class SyncHub(
+public sealed partial class SyncHub(
     UserDirectory users,
     DeviceRegistry devices,
+    DeviceProofServer proofs,
     ProjectAccess projects,
+    InvitationAccess invitations,
     UpdateLog updateLog,
     ConnectionRegistry connections,
     ILogger<SyncHub> logger) : Hub<ISyncClient>, ISyncHub
 {
     private const string UserIdItem = "userId";
     private const string DeviceIdItem = "deviceId";
+    private const string ChallengeItem = "deviceChallenge";
+    private const string AuthenticatedItem = "deviceAuthenticated";
 
-    private Guid UserId => (Guid)Context.Items[UserIdItem]!;
-    private Guid DeviceId => (Guid)Context.Items[DeviceIdItem]!;
+    private Guid UserId => Context.Items.TryGetValue(UserIdItem, out var value) && value is Guid id ? id : throw new AccessDeniedException("The connection has no authenticated account.");
+    private Guid DeviceId => Context.Items.TryGetValue(DeviceIdItem, out var value) && value is Guid id ? id : throw new AccessDeniedException("The connection has no registered device.");
 
     public override async Task OnConnectedAsync()
     {
         var cancellationToken = Context.ConnectionAborted;
         var deviceId = ReadDeviceId();
-        var user = await users.GetOrCreateAsync(Context.User!, cancellationToken);
+        var user = await users.GetOrCreateAsync(Context.User ?? throw new AccessDeniedException("Sign in before connecting."), cancellationToken);
 
         // Register before checking, so a revocation that lands in between still finds
         // this connection. If the check fails, the connection never counts as open.
@@ -53,6 +57,22 @@ public sealed class SyncHub(
     {
         connections.Remove(Context.ConnectionId);
         await base.OnDisconnectedAsync(exception);
+    }
+
+    public Task<DeviceConnectionChallenge> GetDeviceChallenge()
+    {
+        if (Context.Items.TryGetValue(ChallengeItem, out var value) && value is DeviceConnectionChallenge existing) return Task.FromResult(existing);
+        var challenge = new DeviceConnectionChallenge(UserId, DeviceId, Guid.NewGuid(), proofs.ServerUrl);
+        Context.Items[ChallengeItem] = challenge;
+        return Task.FromResult(challenge);
+    }
+
+    public async Task AuthenticateDevice(byte[] signature)
+    {
+        if (!Context.Items.Remove(ChallengeItem, out var value) || value is not DeviceConnectionChallenge challenge)
+            throw new AccessDeniedException("Request a fresh device challenge first.");
+        await devices.VerifyConnectionAsync(challenge, signature, Context.ConnectionAborted);
+        Context.Items[AuthenticatedItem] = true;
     }
 
     public async Task CreateProject(Guid projectId)
@@ -86,7 +106,10 @@ public sealed class SyncHub(
         }
     }
 
-    public Task LeaveProject(Guid projectId) => Groups.RemoveFromGroupAsync(Context.ConnectionId, ProjectGroup(projectId), Context.ConnectionAborted);
+    public Task LeaveProject(Guid projectId)
+    {
+        return Groups.RemoveFromGroupAsync(Context.ConnectionId, ProjectGroup(projectId), Context.ConnectionAborted);
+    }
 
     public async Task<long> Push(Envelope envelope)
     {
@@ -112,6 +135,7 @@ public sealed class SyncHub(
 
         return serverSeq;
     }
+
 
     public async IAsyncEnumerable<SequencedEnvelope> CatchUp(Guid projectId, long afterServerSeq, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
@@ -141,7 +165,12 @@ public sealed class SyncHub(
             : throw new HubException($"Connect with ?{Protocol.DeviceIdParameter}=<guid>.");
     }
 
-    private Task EnsureDeviceActiveAsync(CancellationToken cancellationToken) => devices.EnsureActiveAsync(UserId, DeviceId, cancellationToken);
+    private async Task EnsureDeviceActiveAsync(CancellationToken cancellationToken)
+    {
+        var key = await devices.AuthenticationKeyAsync(UserId, DeviceId, cancellationToken);
+        if (key is not null && (!Context.Items.TryGetValue(AuthenticatedItem, out var authenticated) || !Equals(authenticated, true)))
+            throw new AccessDeniedException("Prove possession of this device key before using the connection.");
+    }
 
     internal static string ProjectGroup(Guid projectId) => $"project:{projectId}";
 }

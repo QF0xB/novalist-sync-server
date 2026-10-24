@@ -9,6 +9,7 @@ public sealed class SyncDbContext(DbContextOptions<SyncDbContext> options) : DbC
     public DbSet<Project> Projects => Set<Project>();
     public DbSet<Membership> Memberships => Set<Membership>();
     public DbSet<StoredUpdate> Updates => Set<StoredUpdate>();
+    public DbSet<Invitation> Invitations => Set<Invitation>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -43,6 +44,16 @@ public sealed class SyncDbContext(DbContextOptions<SyncDbContext> options) : DbC
             update.HasIndex(u => new { u.ProjectId, u.SenderDeviceId, u.SenderSeq }).IsUnique();
             update.HasOne<Project>().WithMany().HasForeignKey(u => u.ProjectId);
             update.HasOne<Device>().WithMany().HasForeignKey(u => u.SenderDeviceId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<Invitation>(invitation =>
+        {
+            invitation.Property(i => i.Id).ValueGeneratedNever();
+            invitation.HasOne<Project>().WithMany().HasForeignKey(i => i.ProjectId);
+            invitation.HasOne<User>().WithMany().HasForeignKey(i => i.RedeemedBy)
+                .OnDelete(DeleteBehavior.Restrict);
+            invitation.HasOne<Device>().WithMany().HasForeignKey(i => i.ActivatedDeviceId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
     }
