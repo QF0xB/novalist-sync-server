@@ -411,18 +411,35 @@ displayed as a word list or grouped base32). From it the client derives a
 **recovery device**:
 
 ```
-recSeed = HKDF(recoveryKey, info = "novalist/v1/recovery")
-recovery device = Ed25519 + X25519 key pairs derived from recSeed
+recSeed       = HKDF-SHA256(recoveryKey, empty salt, "novalist/v1/recovery", 32)
+signingSeed   = HKDF-SHA256(recSeed, empty salt, "novalist/v1/recovery/signing", 32)
+receivingSeed = HKDF-SHA256(recSeed, empty salt, "novalist/v1/recovery/receiving", 32)
+recovery device = Ed25519(signingSeed) + X25519(receivingSeed)
 ```
 
-The recovery device is registered like a normal device, so every project's epoch
-keys are automatically wrapped for it — no separate backup to keep in sync.
+First verified enrollment atomically registers the ordinary device and its
+recovery device, with independent signing and receiving keys. The recovery
+device signs its own registration; the ordinary device signs its linking proof.
+An existing verified device can also authorize a recovery device through ordinary
+device linking. The client keeps all private key material and clears temporary
+derived seeds. The server stores both ordinary and recovery public device records,
+never their private keys or the recovery key.
 
-To recover: on a new installation the user enters the recovery key, the client
-re-derives the recovery device, unwraps the epoch keys, and uses the recovery
-device's signing key to link the new real device. Lose all devices **and** the
-recovery key → data is gone. Anyone holding the recovery key has full access, so
-the UI must say so clearly.
+On a new installation, the client re-derives the recovery identity from the saved
+key and uses it to sign a replacement device's linking proof. This remains valid
+after the ordinary device has been revoked. Revoked records never reopen
+token-only enrollment, and a revoked recovery device cannot authorize a link.
+
+This recovers account/device enrollment. Access to previous project content still
+requires retained project keys or an authorized collaborator's key grant and
+device certificate; enrollment does not recreate missing encryption keys. Full
+project recovery needs epoch keys wrapped for the recovery device. The explicit
+client enrollment API requires a caller-supplied recovery identity; it does not
+silently generate or save an undisclosed recovery secret. Losing every authorized
+device and the recovery key leaves no cryptographic recovery path.
+The UI must warn that anyone holding the recovery key can authorize replacement
+devices and has full access to project content whose epoch keys are wrapped for
+the recovery device.
 
 ## 7. Message format
 
@@ -605,7 +622,7 @@ MIME types and keys are only visible inside the encrypted manifest.
 | Table          | Contents                                                       | Server can read? |
 | -------------- | -------------------------------------------------------------- | ---------------- |
 | `users`        | OIDC issuer + subject, email, username (§10.1)                 | yes              |
-| `devices`      | deviceId, userId, public keys, linking signature, `isRecovery` | public keys only |
+| `devices`      | deviceId, userId, public keys, linking deviceId and signature | public keys only |
 | `projects`     | projectId, current epoch, epoch start time                     | yes              |
 | `memberships`  | projectId, userId, role (owner, contributor, viewer)           | yes              |
 | `wrapped_keys` | §6.3 records                                                   | no               |
@@ -615,6 +632,33 @@ MIME types and keys are only visible inside the encrypted manifest.
 
 Visible metadata: project and item counts, member lists, devices, timestamps,
 edit frequency per item, sizes.
+
+Device authentication adds immutable 32-byte Ed25519 and X25519 public keys to
+device records, plus the linking device ID and its public signature when linked.
+`GET /devices/registration` returns the authenticated account's internal user
+UUID and configured canonical server URL. `PUT /devices/verified` receives those public keys, the new device's
+registration signature, and an optional linking device ID/signature. First
+enrollment also supplies `RecoveryDevice`: another device's public keys,
+self-registration signature and the ordinary device's linking signature. This
+exposes the recovery-device association during enrollment, without exposing its
+secret. A fresh hub
+challenge contains that user UUID, device UUID, canonical server URL and a random per-connection UUID;
+it is consumed when a proof is attempted and is never logged. The server uses
+NSec only to verify Ed25519 signatures, as permitted by rule 7. No private or
+symmetric key, project title, path or content is added to these APIs.
+
+Registration signs `novalist/v1/device-register || server || userId || deviceId || DSK.public
+|| DXK.public`. Linking signs `novalist/v1/device-link || linkingDeviceId ||
+registrationBytes`. Connection proof signs `novalist/v1/device-connect || server || userId
+|| deviceId || challengeNonce`. UUIDs use RFC 9562 big-endian bytes. Keys are
+32 bytes and signatures 64 bytes. Domain strings are UTF-8 without terminators.
+`server` is a big-endian uint16 byte length followed by the UTF-8 canonical server
+URL, with one trailing slash. Administrators configure `Collaboration__ServerUrl`
+to the public HTTPS base URL (loopback HTTP is allowed for local tests). It is
+never inferred from an untrusted Host header. Clients compare the advertised URL
+with their selected endpoint and sign their own canonical endpoint. This prevents
+a server from relaying a proof to another server accepting the same OIDC token.
+Changing the public endpoint requires clients to select the new canonical URL.
 
 Project names, item names and paths are **not** stored in `projects` or anywhere
 else on the server; they live in the encrypted structure doc (§5.1).
@@ -626,9 +670,33 @@ stores no passwords. A user is identified by the token's issuer and `sub` claim,
 which never change; email and username are optional, refreshed from the token's
 claims, and only used to find people when inviting them (§8.5).
 
-OIDC authenticates the **user**, not the device. Until devices authenticate with
-their own key (§12), the server only checks that the device ID a connection
-claims belongs to the logged-in user.
+OIDC authenticates the **user**, not the device. Verified devices additionally
+answer a fresh `GetDeviceChallenge` using `AuthenticateDevice` before project
+or update operations. Public keys cannot be replaced under
+an existing device ID. The first verified registration serializes on the account
+and requires fresh MFA bound to both ordinary and recovery public-key records.
+The client obtains a five-minute, one-use enrollment challenge, then uses its
+nonce for a new authorization-code/PKCE browser login with `max_age=0`.
+The server verifies the signed ID token's issuer, native-client audience,
+account subject, nonce, expiry, `amr` containing `mfa`, and a single `auth_time`
+within the last five minutes. Ordinary bearer access tokens authenticate the
+API calls. Registration signatures prove possession of the device keys.
+An existing `cnf.jkt` access-token flow remains accepted, but is no longer the
+only enrollment path. See [device-enrollment.md](device-enrollment.md) for client
+entry points, provider configuration, challenge limits, and metadata exposure.
+Existing registrations can be retried without repeating enrollment or creating
+another recovery device. Later devices require a signature from an active
+verified device of that account, including its pre-provisioned recovery device.
+Revoked device records still prevent bootstrapping a replacement without linking.
+Registration/linking, revocation, and legacy eligibility checks plus their
+mutations serialize on the same account lock. An already-authorized legacy
+request finishes before verified enrollment can commit; it cannot mutate the
+account after the cutover using an earlier eligibility check.
+
+Legacy clients continue to work for accounts with no verified devices. Registering
+the first verified device opts that account into possession checks and closes its
+existing connections. Legacy device registration and access HTTP endpoints
+then reject that account. This prevents falling back to UUID-only access after revocation.
 
 The server is pointed at the provider through configuration (environment
 variables, never `appsettings*.json`):
@@ -642,6 +710,20 @@ variables, never `appsettings*.json`):
 Outside Development the server refuses to start without both. Access tokens are
 only accepted in the `Authorization` header, never in the URL, so they cannot
 end up in access logs.
+
+For native desktop sign-in, admins additionally configure
+`Authentication__NativeClient__ClientId` and
+`Authentication__NativeClient__Scope` (including `openid` and the provider's
+API scopes; `offline_access` enables refresh tokens where supported). Register
+this as a public native client using authorization code with S256 PKCE and a
+loopback redirect at `http://127.0.0.1:{ephemeral-port}/callback`, following
+RFC 8252. No client secret is shipped with the desktop application.
+
+`GET /client-configuration` publishes only the protocol version, configured
+issuer URL, native client ID and scopes. These are public service configuration,
+not user or project data. The endpoint returns 503 when native sign-in is not
+configured; existing authenticated hub clients remain supported. This endpoint
+does not create an OIDC provider or register the native client in that provider.
 
 Roles per membership:
 
@@ -701,6 +783,22 @@ Roles per membership:
       updates, and a compromised server could relay them. Clients must reject
       updates from viewer devices too, which needs a member/role list the server
       cannot forge (e.g. signed by an owner).
+
+## Relay-only desktop integration
+
+The Novalist desktop integration now uses the live packet relay described in
+[relay.md](relay.md). Enable it with `Relay:Enabled=true`; it supersedes this document's
+storage and offline-joining design for that integration. It maps no persistence
+endpoints and requires no database. The preceding design remains documentation
+for persistence mode, which remains the default (`Relay:Enabled=false`).
+
+Relay authentication is optional through `Relay:RequireAuthentication=false`;
+the default remains true. Anonymous hosts prove route ownership with a random
+session capability in the `X-Novalist-Relay-Host` request header. The server learns
+that capability and retains only its SHA-256 hash in memory for the session's
+lifetime. This adds transient relay metadata, not project encryption keys or
+participant names. See [relay.md](relay.md) for discovery, transport requirements
+and ownership checks. The legacy persistence mode's authentication is unchanged.
 
 ## 13. Future work
 

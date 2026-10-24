@@ -2,6 +2,9 @@ namespace Novalist.Sync.Contracts;
 
 public interface ISyncHub
 {
+    Task<DeviceConnectionChallenge> GetDeviceChallenge();
+    Task AuthenticateDevice(byte[] signature);
+
     Task JoinProject(Guid projectId);
     Task LeaveProject(Guid projectId);
 

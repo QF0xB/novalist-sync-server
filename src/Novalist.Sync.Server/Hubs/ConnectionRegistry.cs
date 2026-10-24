@@ -23,6 +23,11 @@ public sealed class ConnectionRegistry
         }
     }
 
+    public void AbortUser(Guid userId)
+    {
+        foreach (var connection in _connections.Values.Where(c => c.UserId == userId)) connection.Context.Abort();
+    }
+
     public IReadOnlyList<string> ConnectionIdsOf(Guid userId) =>
         _connections.Values
             .Where(c => c.UserId == userId)

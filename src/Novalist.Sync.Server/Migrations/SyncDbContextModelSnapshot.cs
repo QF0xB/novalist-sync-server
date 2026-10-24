@@ -32,9 +32,25 @@ namespace Novalist.Sync.Server.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
 
+                    b.Property<Guid?>("LinkedByDeviceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("linked_by_device_id");
+
+                    b.Property<byte[]>("LinkingSignature")
+                        .HasColumnType("bytea")
+                        .HasColumnName("linking_signature");
+
+                    b.Property<byte[]>("ReceivingPublicKey")
+                        .HasColumnType("bytea")
+                        .HasColumnName("receiving_public_key");
+
                     b.Property<DateTimeOffset?>("RevokedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("revoked_at");
+
+                    b.Property<byte[]>("SigningPublicKey")
+                        .HasColumnType("bytea")
+                        .HasColumnName("signing_public_key");
 
                     b.Property<Guid>("UserId")
                         .HasColumnType("uuid")

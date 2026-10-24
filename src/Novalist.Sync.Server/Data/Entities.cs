@@ -16,6 +16,10 @@ public sealed class Device
     public Guid UserId { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset? RevokedAt { get; set; }
+    public byte[]? SigningPublicKey { get; set; }
+    public byte[]? ReceivingPublicKey { get; set; }
+    public Guid? LinkedByDeviceId { get; set; }
+    public byte[]? LinkingSignature { get; set; }
 }
 
 public sealed class Project
@@ -55,3 +59,11 @@ public sealed class StoredUpdate
     public byte[] Signature { get; set; } = [];
     public DateTimeOffset ReceivedAt { get; set; }
 }
+
+
+
+
+
+
+
+

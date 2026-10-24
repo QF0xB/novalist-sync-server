@@ -45,5 +45,6 @@ public sealed class SyncDbContext(DbContextOptions<SyncDbContext> options) : DbC
             update.HasOne<Device>().WithMany().HasForeignKey(u => u.SenderDeviceId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
+
     }
 }

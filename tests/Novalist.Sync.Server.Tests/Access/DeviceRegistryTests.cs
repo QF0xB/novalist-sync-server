@@ -151,19 +151,19 @@ public class DeviceRegistryTests(DatabaseFixture database)
     private async Task RegisterAsync(Guid userId, Guid deviceId)
     {
         await using var db = database.CreateContext();
-        await new DeviceRegistry(db).RegisterAsync(userId, deviceId, Ct);
+        await new DeviceRegistry(db, database.DeliveryGate).RegisterAsync(userId, deviceId, Ct);
     }
 
     private async Task EnsureActiveAsync(Guid userId, Guid deviceId)
     {
         await using var db = database.CreateContext();
-        await new DeviceRegistry(db).EnsureActiveAsync(userId, deviceId, Ct);
+        await new DeviceRegistry(db, database.DeliveryGate).EnsureActiveAsync(userId, deviceId, Ct);
     }
 
     private async Task RevokeAsync(Guid userId, Guid deviceId)
     {
         await using var db = database.CreateContext();
-        await new DeviceRegistry(db).RevokeAsync(userId, deviceId, Ct);
+        await new DeviceRegistry(db, database.DeliveryGate).RevokeAsync(userId, deviceId, Ct);
     }
 
     private async Task<DateTimeOffset?> RevokedAtAsync(Guid deviceId)
