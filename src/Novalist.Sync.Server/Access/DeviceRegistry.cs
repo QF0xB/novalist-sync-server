@@ -4,12 +4,13 @@ using Npgsql;
 
 namespace Novalist.Sync.Server.Access;
 
-public sealed class DeviceRegistry(SyncDbContext db)
+public sealed partial class DeviceRegistry(SyncDbContext db, AccessDeliveryGate deliveryGate)
 {
     private const string DevicePrimaryKey = "pk_devices";
 
     public async Task RegisterAsync(Guid userId, Guid deviceId, CancellationToken cancellationToken)
     {
+        await using var transaction = await AccountAccessLock.AcquireAsync(db, userId, legacyAccount: true, cancellationToken);
         if (await IsRegisteredAsync(userId, deviceId, cancellationToken))
         {
             return;
@@ -31,13 +32,12 @@ public sealed class DeviceRegistry(SyncDbContext db)
             db.ChangeTracker.Clear();
             await IsRegisteredAsync(userId, deviceId, cancellationToken);
         }
+        await transaction.CommitAsync(cancellationToken);
     }
 
     public async Task EnsureActiveAsync(Guid userId, Guid deviceId, CancellationToken cancellationToken)
     {
-        var active = await db.Devices.AnyAsync(
-            d => d.Id == deviceId && d.UserId == userId && d.RevokedAt == null,
-            cancellationToken);
+        var active = await ActiveDevices(db).AnyAsync(d => d.Id == deviceId && d.UserId == userId, cancellationToken);
 
         if (!active)
         {
@@ -47,6 +47,8 @@ public sealed class DeviceRegistry(SyncDbContext db)
 
     public async Task RevokeAsync(Guid userId, Guid deviceId, CancellationToken cancellationToken)
     {
+        await using var delivery = await deliveryGate.AccountAsync(userId, cancellationToken);
+        await using var transaction = await AccountAccessLock.AcquireAsync(db, userId, legacyAccount: false, cancellationToken);
         var revoked = await db.Devices
             .Where(d => d.Id == deviceId && d.UserId == userId && d.RevokedAt == null)
             .ExecuteUpdateAsync(
@@ -56,6 +58,7 @@ public sealed class DeviceRegistry(SyncDbContext db)
         {
             throw new AccessDeniedException($"Device {deviceId} is not an active device of this user.");
         }
+        await transaction.CommitAsync(cancellationToken);
     }
 
     // True if the device already belongs to the user; throws if the ID cannot be used.

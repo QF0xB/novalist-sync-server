@@ -346,6 +346,7 @@ public sealed class SyncHubTests(DatabaseFixture database) : IAsyncDisposable
     {
         var client = await ConnectAsync();
         var projectId = await database.CreateProjectAsync((client.UserId, MembershipRole.Owner));
+        await client.JoinAsync(projectId);
 
         // Revoked only in the database, without closing the connection: every call must check.
         await using (var db = database.CreateContext())
@@ -358,6 +359,8 @@ public sealed class SyncHubTests(DatabaseFixture database) : IAsyncDisposable
         await Assert.ThrowsAsync<HubException>(() => client.CreateProjectAsync(Guid.NewGuid()));
         await Assert.ThrowsAsync<HubException>(() => client.JoinAsync(projectId));
         await Assert.ThrowsAsync<HubException>(() => client.PushAsync(TestData.Envelope(projectId, client.DeviceId, senderSeq: 1)));
+        await Assert.ThrowsAsync<HubException>(() => client.Connection.InvokeAsync("PublishPresence",
+            TestData.Envelope(projectId, client.DeviceId, 2, MsgType.Presence), Ct));
         await Assert.ThrowsAsync<HubException>(() => client.CatchUpAsync(projectId, afterServerSeq: 0));
     }
 
@@ -457,6 +460,100 @@ public sealed class SyncHubTests(DatabaseFixture database) : IAsyncDisposable
     }
 
     // --- Helpers ------------------------------------------------------------------
+
+    [Fact]
+    public async Task Presence_ReachesConnectedMembers_WithoutEnteringCatchUp()
+    {
+        var owner = await ConnectAsync();
+        var guest = await ConnectAsync();
+        var project = await database.CreateProjectAsync((owner.UserId, MembershipRole.Owner),
+            (guest.UserId, MembershipRole.Contributor));
+        await owner.JoinAsync(project);
+        await guest.JoinAsync(project);
+        var received = new TaskCompletionSource<Envelope>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var subscription = guest.Connection.On<Envelope>("ReceivePresence", value => received.TrySetResult(value));
+        var presence = TestData.Envelope(project, owner.DeviceId, 1, MsgType.Presence);
+
+        await owner.Connection.InvokeAsync("PublishPresence", presence, Ct);
+
+        var relayed = await received.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        Assert.Equal(presence.Ciphertext, relayed.Ciphertext);
+        Assert.Equal(presence.Header, relayed.Header);
+        Assert.Equal(presence.Nonce, relayed.Nonce);
+        Assert.Equal(presence.Signature, relayed.Signature);
+        Assert.Empty(await guest.CatchUpAsync(project, 0));
+        Assert.Equal(1, await owner.PushAsync(TestData.Envelope(project, owner.DeviceId, 2)));
+    }
+
+    [Fact]
+    public async Task Presence_RejectsOtherDevicesAndInvalidEnvelopes_AndStopsOnRemoval()
+    {
+        var owner = await ConnectAsync();
+        var guest = await ConnectAsync();
+        var project = await database.CreateProjectAsync((owner.UserId, MembershipRole.Owner),
+            (guest.UserId, MembershipRole.Contributor));
+        await guest.JoinAsync(project);
+        var valid = TestData.Envelope(project, guest.DeviceId, 1, MsgType.Presence);
+        var header = EnvelopeHeader.Parse(valid.Header);
+        Envelope[] invalid =
+        [
+            valid with { Header = (header with { SenderDeviceId = owner.DeviceId }).ToBytes() },
+            valid with { Header = (header with { MsgType = MsgType.Update }).ToBytes() },
+            valid with { Header = (header with { Epoch = 1 }).ToBytes() },
+            valid with { Header = (header with { ProtoVersion = 255 }).ToBytes() },
+            valid with { Ciphertext = new byte[4097] },
+            valid with { Nonce = [] },
+            valid with { Signature = [] }
+        ];
+        foreach (var envelope in invalid)
+            await Assert.ThrowsAsync<HubException>(() => guest.Connection.InvokeAsync("PublishPresence", envelope, Ct));
+        await guest.Connection.InvokeAsync("PublishPresence", valid, Ct);
+        await RemoveMemberAsync(owner.UserId, project, guest.UserId);
+        await Assert.ThrowsAsync<HubException>(() => guest.Connection.InvokeAsync("PublishPresence", valid, Ct));
+        Assert.Empty(await owner.CatchUpAsync(project, 0));
+        await RevokeDeviceAsync(owner.UserId, owner.DeviceId);
+        await owner.Closed;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => owner.Connection.InvokeAsync("PublishPresence",
+            TestData.Envelope(project, owner.DeviceId, 1, MsgType.Presence), Ct));
+        foreach (var entry in _server.Logs.Entries)
+        {
+            var text = entry.Message + entry.Exception + entry.ScopeText;
+            Assert.DoesNotContain(Convert.ToBase64String(valid.Ciphertext), text);
+            Assert.DoesNotContain(Convert.ToHexString(valid.Ciphertext), text);
+            Assert.DoesNotContain(entry.Values.Concat(entry.ScopeValues), value => value is byte[] or Envelope);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FieldLeaseOperationsRecheckRevocationOnAnAlreadyOpenConnection(bool revokeDevice)
+    {
+        var writer = await ConnectAsync();
+        var project = await database.CreateProjectAsync((writer.UserId, MembershipRole.Contributor));
+        var request = new FieldLeaseRequest(project, Guid.NewGuid(), 0, Guid.NewGuid(), DateTimeOffset.UtcNow.AddMinutes(1));
+        await writer.Connection.InvokeAsync<FieldLeaseGrant>("AcquireFieldLease", request, Ct);
+        var envelope = TestData.Envelope(project, writer.DeviceId, 1);
+        await writer.Connection.InvokeAsync<long>("PushFieldEdit", request, envelope, Ct);
+        await using (var db = database.CreateContext())
+        {
+            if (revokeDevice) await db.Devices.Where(device => device.Id == writer.DeviceId)
+                .ExecuteUpdateAsync(set => set.SetProperty(device => device.RevokedAt, DateTimeOffset.UtcNow), Ct);
+            else await db.Memberships.Where(member => member.ProjectId == project && member.UserId == writer.UserId).ExecuteDeleteAsync(Ct);
+        }
+        Assert.Equal(HubConnectionState.Connected, writer.Connection.State);
+        await Assert.ThrowsAsync<HubException>(() => writer.Connection.InvokeAsync<FieldLeaseGrant>("AcquireFieldLease", request, Ct));
+        await Assert.ThrowsAsync<HubException>(() => writer.Connection.InvokeAsync<FieldLeaseGrant?>("RenewFieldLease", request, Ct));
+        await Assert.ThrowsAsync<HubException>(() => writer.Connection.InvokeAsync<bool>("ReleaseFieldLease", request, Ct));
+        await Assert.ThrowsAsync<HubException>(() => writer.Connection.InvokeAsync<long>("PushFieldEdit", request, envelope, Ct));
+        foreach (var entry in _server.Logs.Entries)
+        {
+            var text = entry.Message + entry.Exception + entry.ScopeText;
+            Assert.DoesNotContain(Convert.ToBase64String(envelope.Ciphertext), text);
+            Assert.DoesNotContain(Convert.ToHexString(envelope.Ciphertext), text);
+            Assert.DoesNotContain(entry.Values.Concat(entry.ScopeValues), value => value is byte[] or Envelope);
+        }
+    }
 
     private async Task<TestClient> ConnectAsync(User? user = null)
     {
