@@ -4,9 +4,11 @@ using Npgsql;
 
 namespace Novalist.Sync.Server.Access;
 
-public sealed class ProjectAccess(SyncDbContext db)
+public sealed partial class ProjectAccess(SyncDbContext db, AccessDeliveryGate deliveryGate)
 {
     private const string ProjectPrimaryKey = "pk_projects";
+
+    internal ValueTask<IAsyncDisposable> PauseDeliveryAsync(Guid project, CancellationToken ct) => deliveryGate.ProjectAsync(project, ct);
 
     public async Task CreateAsync(Guid userId, Guid projectId, CancellationToken cancellationToken)
     {
@@ -67,16 +69,27 @@ public sealed class ProjectAccess(SyncDbContext db)
     public async Task RemoveMemberAsync(Guid ownerId, Guid projectId, Guid memberId,
         CancellationToken cancellationToken)
     {
-        await EnsureIsOwnerAsync(ownerId, projectId, cancellationToken);
-
         if (memberId == ownerId)
         {
             throw new ConflictException($"Cannot remove owner from project {projectId}.");
         }
 
+        await EnsureIsOwnerAsync(ownerId, projectId, cancellationToken);
+        if (!await db.Users.AnyAsync(user => user.Id == memberId, cancellationToken)) return;
+        await using var delivery = await PauseDeliveryAsync(projectId, cancellationToken);
+        await using var transaction = await AccountAccessLock.AcquireAsync(db, memberId, legacyAccount: false, cancellationToken);
+        await db.Projects.FromSqlInterpolated($"SELECT * FROM projects WHERE id = {projectId} FOR UPDATE").ToListAsync(cancellationToken);
+        await EnsureIsOwnerAsync(ownerId, projectId, cancellationToken);
+        if (await db.ProjectDeviceAuthorizations.AnyAsync(value => value.ProjectId == projectId, cancellationToken))
+            throw new ConflictException("Rotate the project encryption keys when removing a registered collaborator.");
+
         await db.Memberships
             .Where(m => m.ProjectId == projectId && m.UserId == memberId)
             .ExecuteDeleteAsync(cancellationToken);
+        await db.Invitations.Where(invitation => invitation.ProjectId == projectId &&
+            (invitation.RedeemedBy == null || invitation.RedeemedBy == memberId))
+            .ExecuteUpdateAsync(set => set.SetProperty(invitation => invitation.ExpiresAt, DateTimeOffset.UnixEpoch), cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
     }
 
     private Task<MembershipRole?> GetRoleAsync(Guid userId, Guid projectId, CancellationToken cancellationToken) =>

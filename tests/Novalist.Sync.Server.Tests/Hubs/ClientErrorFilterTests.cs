@@ -18,6 +18,7 @@ public class ClientErrorFilterTests
         new ConflictException("taken"),
         new PushRejectedException("rejected"),
         new FormatException("bad header"),
+        new ArgumentException("invalid invitation"),
         new UnsupportedProtocolVersionException(2),
     ];
 

@@ -10,6 +10,18 @@ the minor version.
 
 ### Added
 
+- Contracts 1.6.0: Epoch rotation: verified project-device certificates, staged checkpoints and opaque key grants, reservations, cancellation, compare-and-set commit, and `ProjectEpochChanged`. New methods and records are additive.
+
+- Contracts 1.5.0: Presence: transient encrypted `PublishPresence` and `ReceivePresence` messages. Delivery rechecks account, device and membership without persisting payloads or holding database locks across network sends.
+
+- Contracts 1.4.0: Membership management: owner-only member listing, removal and project deletion, stable role names, and `ProjectAccessEnded` notifications. New methods and records are additive.
+
+- Contracts 1.3.0: Invitations: owner-issued single-use claims, revocation tombstones and device/certificate-bound activation receipts, with authenticated hub and legacy HTTP entry points. Invitation records and hub methods are additive.
+
+- Contracts 1.2.0: Verified devices and recovery: public-key possession proofs, linked recovery identities, and a one-use browser-MFA enrollment challenge bound to ordinary and recovery keys. `DeviceEnrollment*`, `DeviceProof`, registration paths and device authentication hub methods are additive.
+
+- Contracts 1.1.0: Relay and native client configuration: opt-in relay routing, optional authentication, limits, connection renewal and bounded authorization grace. `NativeClientConfiguration`, `RelayProtocol` and client configuration path constants are additive; the envelope protocol remains 1.
+
 - `Protocol.Version` (protocol version 1).
 - `MsgType` enum: `Update = 1`, `Snapshot = 2`, `Presence = 3`.
 - `EnvelopeHeader` record with the 62-byte layout from design.md §7:
