@@ -8,25 +8,31 @@ using Novalist.Sync.Server.Updates;
 namespace Novalist.Sync.Server.Hubs;
 
 [Authorize]
-public sealed class SyncHub(
+public sealed partial class SyncHub(
     UserDirectory users,
     DeviceRegistry devices,
+    DeviceProofServer proofs,
     ProjectAccess projects,
+    AccessRevocation revocation,
+    InvitationAccess invitations,
     UpdateLog updateLog,
+    PresenceAccess presence,
     ConnectionRegistry connections,
     ILogger<SyncHub> logger) : Hub<ISyncClient>, ISyncHub
 {
     private const string UserIdItem = "userId";
     private const string DeviceIdItem = "deviceId";
+    private const string ChallengeItem = "deviceChallenge";
+    private const string AuthenticatedItem = "deviceAuthenticated";
 
-    private Guid UserId => (Guid)Context.Items[UserIdItem]!;
-    private Guid DeviceId => (Guid)Context.Items[DeviceIdItem]!;
+    private Guid UserId => Context.Items.TryGetValue(UserIdItem, out var value) && value is Guid id ? id : throw new AccessDeniedException("The connection has no authenticated account.");
+    private Guid DeviceId => Context.Items.TryGetValue(DeviceIdItem, out var value) && value is Guid id ? id : throw new AccessDeniedException("The connection has no registered device.");
 
     public override async Task OnConnectedAsync()
     {
         var cancellationToken = Context.ConnectionAborted;
         var deviceId = ReadDeviceId();
-        var user = await users.GetOrCreateAsync(Context.User!, cancellationToken);
+        var user = await users.GetOrCreateAsync(Context.User ?? throw new AccessDeniedException("Sign in before connecting."), cancellationToken);
 
         // Register before checking, so a revocation that lands in between still finds
         // this connection. If the check fails, the connection never counts as open.
@@ -55,6 +61,22 @@ public sealed class SyncHub(
         await base.OnDisconnectedAsync(exception);
     }
 
+    public Task<DeviceConnectionChallenge> GetDeviceChallenge()
+    {
+        if (Context.Items.TryGetValue(ChallengeItem, out var value) && value is DeviceConnectionChallenge existing) return Task.FromResult(existing);
+        var challenge = new DeviceConnectionChallenge(UserId, DeviceId, Guid.NewGuid(), proofs.ServerUrl);
+        Context.Items[ChallengeItem] = challenge;
+        return Task.FromResult(challenge);
+    }
+
+    public async Task AuthenticateDevice(byte[] signature)
+    {
+        if (!Context.Items.Remove(ChallengeItem, out var value) || value is not DeviceConnectionChallenge challenge)
+            throw new AccessDeniedException("Request a fresh device challenge first.");
+        await devices.VerifyConnectionAsync(challenge, signature, Context.ConnectionAborted);
+        Context.Items[AuthenticatedItem] = true;
+    }
+
     public async Task CreateProject(Guid projectId)
     {
         var cancellationToken = Context.ConnectionAborted;
@@ -78,6 +100,7 @@ public sealed class SyncHub(
         try
         {
             await projects.EnsureCanReadAsync(UserId, projectId, cancellationToken);
+            connections.JoinProject(Context.ConnectionId, projectId);
         }
         catch
         {
@@ -86,7 +109,11 @@ public sealed class SyncHub(
         }
     }
 
-    public Task LeaveProject(Guid projectId) => Groups.RemoveFromGroupAsync(Context.ConnectionId, ProjectGroup(projectId), Context.ConnectionAborted);
+    public Task LeaveProject(Guid projectId)
+    {
+        connections.LeaveProject(Context.ConnectionId, projectId);
+        return Groups.RemoveFromGroupAsync(Context.ConnectionId, ProjectGroup(projectId), Context.ConnectionAborted);
+    }
 
     public async Task<long> Push(Envelope envelope)
     {
@@ -113,6 +140,19 @@ public sealed class SyncHub(
         return serverSeq;
     }
 
+    public async Task PublishPresence(Envelope envelope)
+    {
+        await EnsureDeviceActiveAsync(Context.ConnectionAborted);
+        var project = (await presence.PreflightAsync(UserId, DeviceId, envelope, Context.ConnectionAborted)).ProjectId;
+        var targets = connections.PresenceTargets(project, Context.ConnectionId, PresenceAccess.MaximumRecipients + 1);
+        if (targets.Count > PresenceAccess.MaximumRecipients)
+            throw new PushRejectedException("Presence is limited to 256 active recipients per message.");
+        await presence.DeliverAsync(UserId, DeviceId, envelope, targets.Select(target => target.DeviceId).ToHashSet(), (projectId, activeDevices, cancellationToken) =>
+            ((Hub)this).Clients.Clients(connections.PresenceRecipients(projectId, activeDevices, targets))
+                .SendCoreAsync(nameof(ISyncClient.ReceivePresence), [envelope], cancellationToken),
+            Context.ConnectionAborted);
+    }
+
     public async IAsyncEnumerable<SequencedEnvelope> CatchUp(Guid projectId, long afterServerSeq, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         try
@@ -128,6 +168,7 @@ public sealed class SyncHub(
 
         await foreach (var update in updateLog.ReadAfterAsync(projectId, afterServerSeq, cancellationToken))
         {
+            if (connections.ProjectRevoked(Context.ConnectionId, projectId)) throw new HubException("Access to this shared project has ended.");
             yield return update;
         }
     }
@@ -141,7 +182,12 @@ public sealed class SyncHub(
             : throw new HubException($"Connect with ?{Protocol.DeviceIdParameter}=<guid>.");
     }
 
-    private Task EnsureDeviceActiveAsync(CancellationToken cancellationToken) => devices.EnsureActiveAsync(UserId, DeviceId, cancellationToken);
+    private async Task EnsureDeviceActiveAsync(CancellationToken cancellationToken)
+    {
+        var key = await devices.AuthenticationKeyAsync(UserId, DeviceId, cancellationToken);
+        if (key is not null && (!Context.Items.TryGetValue(AuthenticatedItem, out var authenticated) || !Equals(authenticated, true)))
+            throw new AccessDeniedException("Prove possession of this device key before using the connection.");
+    }
 
     internal static string ProjectGroup(Guid projectId) => $"project:{projectId}";
 }

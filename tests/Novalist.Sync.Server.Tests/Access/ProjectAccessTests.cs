@@ -128,10 +128,19 @@ public class ProjectAccessTests(DatabaseFixture database)
         Assert.True(await IsAllowedAsync(access => access.EnsureIsOwnerAsync(owner.Id, projectId, Ct)));
     }
 
+    [Fact]
+    public async Task RemoveMember_MissingTargetIsANoOpForTheOwner()
+    {
+        var owner = await database.CreateUserAsync();
+        var project = await database.CreateProjectAsync((owner.Id, MembershipRole.Owner));
+        await CallAsync(access => access.RemoveMemberAsync(owner.Id, project, Guid.NewGuid(), Ct));
+        Assert.True(await IsAllowedAsync(access => access.EnsureIsOwnerAsync(owner.Id, project, Ct)));
+    }
+
     private async Task CallAsync(Func<ProjectAccess, Task> call)
     {
         await using var db = database.CreateContext();
-        await call(new ProjectAccess(db));
+        await call(new ProjectAccess(db, database.DeliveryGate));
     }
 
     private async Task<bool> IsAllowedAsync(Func<ProjectAccess, Task> check)

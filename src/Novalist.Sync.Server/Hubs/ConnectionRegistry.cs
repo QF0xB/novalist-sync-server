@@ -1,12 +1,10 @@
 using System.Collections.Concurrent;
-using System.Security.Cryptography;
 using Microsoft.AspNetCore.SignalR;
 
 namespace Novalist.Sync.Server.Hubs;
 
 // Which user and device each open hub connection belongs to, so access can be
 // revoked immediately. Only in memory currently.
-// TODO: Make multi server compatible 
 public sealed class ConnectionRegistry
 {
     private readonly ConcurrentDictionary<string, Connection> _connections = new();
@@ -23,11 +21,58 @@ public sealed class ConnectionRegistry
         }
     }
 
+    public void AbortUser(Guid userId)
+    {
+        foreach (var connection in _connections.Values.Where(c => c.UserId == userId)) connection.Context.Abort();
+    }
+
     public IReadOnlyList<string> ConnectionIdsOf(Guid userId) =>
         _connections.Values
             .Where(c => c.UserId == userId)
             .Select(c => c.Context.ConnectionId)
             .ToList();
 
-    private sealed record Connection(HubCallerContext Context, Guid UserId, Guid DeviceId);
+    public void RevokeProject(Guid userId, Guid projectId)
+    {
+        foreach (var connection in _connections.Values.Where(value => value.UserId == userId))
+        {
+            connection.Projects[projectId] = ProjectConnectionState.Revoked;
+        }
+    }
+
+    public void JoinProject(string connectionId, Guid projectId)
+    {
+        if (!_connections.TryGetValue(connectionId, out var connection)) return;
+        connection.Projects[projectId] = ProjectConnectionState.Joined;
+    }
+
+    public void LeaveProject(string connectionId, Guid projectId)
+    {
+        if (_connections.TryGetValue(connectionId, out var connection))
+            connection.Projects.TryRemove(new(projectId, ProjectConnectionState.Joined));
+    }
+
+    public IReadOnlyList<PresenceTarget> PresenceTargets(Guid projectId, string sender, int limit) =>
+        _connections.Select(pair => pair.Value).Where(connection => connection.Context.ConnectionId != sender &&
+            connection.Projects.TryGetValue(projectId, out var state) && state == ProjectConnectionState.Joined)
+            .Take(limit).Select(connection => new PresenceTarget(connection.Context.ConnectionId, connection.DeviceId)).ToArray();
+
+    public IReadOnlyList<string> PresenceRecipients(Guid projectId, IReadOnlySet<Guid> activeDevices, IReadOnlyList<PresenceTarget> targets) =>
+        targets.Where(target => _connections.TryGetValue(target.ConnectionId, out var connection) &&
+            connection.DeviceId == target.DeviceId && activeDevices.Contains(target.DeviceId) &&
+            connection.Projects.TryGetValue(projectId, out var state) && state == ProjectConnectionState.Joined)
+            .Select(target => target.ConnectionId).ToArray();
+
+    public bool ProjectRevoked(string connectionId, Guid projectId) =>
+        !_connections.TryGetValue(connectionId, out var connection) ||
+        connection.Projects.TryGetValue(projectId, out var state) && state == ProjectConnectionState.Revoked;
+
+    private enum ProjectConnectionState { Joined, Revoked }
+
+    private sealed record Connection(HubCallerContext Context, Guid UserId, Guid DeviceId)
+    {
+        internal ConcurrentDictionary<Guid, ProjectConnectionState> Projects { get; } = new();
+    }
 }
+
+public sealed record PresenceTarget(string ConnectionId, Guid DeviceId);
