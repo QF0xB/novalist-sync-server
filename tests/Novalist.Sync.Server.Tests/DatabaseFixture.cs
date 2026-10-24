@@ -1,5 +1,7 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Novalist.Sync.Server.Data;
+using Novalist.Sync.Server.Access;
 using Npgsql;
 
 [assembly: AssemblyFixture(typeof(Novalist.Sync.Server.Tests.DatabaseFixture))]
@@ -10,6 +12,8 @@ namespace Novalist.Sync.Server.Tests;
 // Tests stay independent by creating their own projects with random IDs.
 public sealed class DatabaseFixture : IAsyncLifetime
 {
+    public AccessDeliveryGate DeliveryGate { get; } = new();
+
     public string ConnectionString { get; } = new NpgsqlConnectionStringBuilder(
         Environment.GetEnvironmentVariable("ConnectionStrings__Default")
         ?? throw new InvalidOperationException("ConnectionStrings__Default is not set. Run the tests inside `devenv shell`."))
@@ -18,10 +22,11 @@ public sealed class DatabaseFixture : IAsyncLifetime
     }.ConnectionString;
 
     // Must match the configuration in Program.cs.
-    public SyncDbContext CreateContext() =>
+    public SyncDbContext CreateContext(params IInterceptor[] interceptors) =>
         new(new DbContextOptionsBuilder<SyncDbContext>()
             .UseNpgsql(ConnectionString)
             .UseSnakeCaseNamingConvention()
+            .AddInterceptors(interceptors)
             .Options);
 
     public async ValueTask InitializeAsync()

@@ -7,7 +7,7 @@ namespace Novalist.Sync.Server.Hubs;
 public sealed class ClientErrorFilter : IHubFilter
 {
     public static bool IsClientError(Exception exception) =>
-        exception is AccessDeniedException or ConflictException or PushRejectedException or FormatException;
+        exception is AccessDeniedException or ConflictException or PushRejectedException or FormatException or ArgumentException;
 
     public async ValueTask<object?> InvokeMethodAsync(HubInvocationContext invocationContext, Func<HubInvocationContext, ValueTask<object?>> next)
     {
