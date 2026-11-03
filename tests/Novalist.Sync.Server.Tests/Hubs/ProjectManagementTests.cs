@@ -54,7 +54,74 @@ public sealed class ProjectManagementTests(DatabaseFixture database)
         await Assert.ThrowsAsync<HubException>(() => guest.Hub.InvokeAsync("CreateProject", project, ct));
     }
 
+    [Fact]
+    public async Task RotationNotifiesRemainingMembersThroughTheHub()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var server = new SyncServer(database);
+        await using var owner = await ConnectAsync(server, ct);
+        await using var remaining = await ConnectAsync(server, ct);
+        await using var removed = await ConnectAsync(server, ct);
+        var project = await database.CreateProjectAsync((owner.UserId, MembershipRole.Owner),
+            (remaining.UserId, MembershipRole.Contributor), (removed.UserId, MembershipRole.Contributor));
+        await using (var db = database.CreateContext())
+        {
+            foreach (var participant in new[] { owner, remaining })
+                db.ProjectDeviceAuthorizations.Add(new()
+                {
+                    ProjectId = project,
+                    DeviceId = participant.DeviceId,
+                    Epoch = 0,
+                    Certificate = RandomNumberGenerator.GetBytes(182)
+                });
+            await db.SaveChangesAsync(ct);
+        }
+        await remaining.Hub.InvokeAsync("JoinProject", project, ct);
+        await removed.Hub.InvokeAsync("JoinProject", project, ct);
+        var changed = new TaskCompletionSource<(Guid Project, uint Epoch)>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var notification = remaining.Hub.On<Guid, uint>("ProjectEpochChanged", (id, epoch) => changed.TrySetResult((id, epoch)));
+        var rotation = Guid.NewGuid();
+        await owner.Hub.InvokeAsync("BeginProjectEpoch", new BeginProjectEpoch(project, rotation, 0, 0), ct);
+        var checkpoint = TestData.Envelope(project, owner.DeviceId, 1);
+        checkpoint = checkpoint with { Header = (EnvelopeHeader.Parse(checkpoint.Header) with { Epoch = 1 }).ToBytes() };
+        await owner.Hub.InvokeAsync<long>("StageProjectEpoch", rotation, checkpoint, ct);
+        var grants = new[] { owner, remaining }.Select(participant => new ProjectEpochGrant(participant.DeviceId,
+            RandomNumberGenerator.GetBytes(182), RandomNumberGenerator.GetBytes(128))).ToArray();
+        await owner.Hub.InvokeAsync("CommitProjectEpoch", new CommitProjectEpoch(rotation, removed.UserId, grants), ct);
+        Assert.Equal((project, 1U), await changed.Task.WaitAsync(TimeSpan.FromSeconds(5), ct));
+        await Assert.ThrowsAsync<HubException>(() => removed.Hub.InvokeAsync<ProjectEpochStatus>("GetProjectEpoch", project, ct));
+    }
 
+    [Fact]
+    public async Task VerifiedOwnerCanReserveAndCancelFromAnotherDeviceWhileOtherCallersCannot()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var server = new SyncServer(database);
+        var account = await database.CreateUserAsync();
+        await using var owner = await ConnectAsync(server, ct, account);
+        await using var another = await ConnectAsync(server, ct, account);
+        await using var guest = await ConnectAsync(server, ct);
+        var project = await database.CreateProjectAsync((owner.UserId, MembershipRole.Owner), (guest.UserId, MembershipRole.Contributor));
+        var rotation = Guid.NewGuid();
+        await using var unverified = server.CreateHubConnection(TestTokens.Create(account.Subject), owner.DeviceId);
+        await unverified.StartAsync(ct);
+        await Assert.ThrowsAsync<HubException>(() => unverified.InvokeAsync<ProjectEpochStatus>("ReserveProjectEpoch", project, rotation, ct));
+        await Assert.ThrowsAsync<HubException>(() => guest.Hub.InvokeAsync<ProjectEpochStatus>("ReserveProjectEpoch", project, rotation, ct));
+        await guest.Hub.InvokeAsync("JoinProject", project, ct);
+        Assert.Equal(1, await guest.Hub.InvokeAsync<long>("Push", TestData.Envelope(project, guest.DeviceId, 1), ct));
+        var boundary = await owner.Hub.InvokeAsync<ProjectEpochStatus>("ReserveProjectEpoch", project, rotation, ct);
+        Assert.Equal(new ProjectEpochStatus(0, 1), boundary);
+        Assert.Equal(boundary, await owner.Hub.InvokeAsync<ProjectEpochStatus>("ReserveProjectEpoch", project, rotation, ct));
+        await Assert.ThrowsAsync<HubException>(() => guest.Hub.InvokeAsync("CancelProjectEpoch", rotation, ct));
+        await Assert.ThrowsAsync<HubException>(() => unverified.InvokeAsync("CancelProjectEpoch", rotation, ct));
+        var waiting = TestData.Envelope(project, guest.DeviceId, 2);
+        await Assert.ThrowsAsync<HubException>(() => guest.Hub.InvokeAsync<long>("Push", waiting, ct));
+        await another.Hub.InvokeAsync("CancelProjectEpoch", rotation, ct);
+        await another.Hub.InvokeAsync("CancelProjectEpoch", rotation, ct);
+        Assert.Equal(2, await guest.Hub.InvokeAsync<long>("Push", waiting, ct));
+        await using var db = database.CreateContext();
+        Assert.False(await db.ProjectEpochStages.AnyAsync(stage => stage.Id == rotation, ct));
+    }
 
     private async Task<Participant> ConnectAsync(SyncServer server, CancellationToken ct, User? user = null)
     {

@@ -70,9 +70,65 @@ public sealed class Invitation
     public byte[]? CertificateHash { get; set; }
 }
 
+public sealed class FieldLease
+{
+    public Guid ProjectId { get; set; }
+    public Guid ResourceId { get; set; }
+    public Guid DeviceId { get; set; }
+    public Guid LeaseId { get; set; }
+    public long Epoch { get; set; }
+    public DateTimeOffset ExpiresAt { get; set; }
+}
 
+public sealed class FieldLeaseAttempt
+{
+    public Guid ProjectId { get; set; }
+    public Guid DeviceId { get; set; }
+    public Guid LeaseId { get; set; }
+    public DateTimeOffset ExpiresAt { get; set; }
+}
 
+public sealed class ProjectDeviceAuthorization
+{
+    public Guid ProjectId { get; set; }
+    public Guid DeviceId { get; set; }
+    public long Epoch { get; set; }
+    public byte[] Certificate { get; set; } = [];
+}
 
+public sealed class ProjectEpochStage
+{
+    public Guid Id { get; set; }
+    public Guid ProjectId { get; set; }
+    public Guid DeviceId { get; set; }
+    public long PreviousEpoch { get; set; }
+    public long PreviousServerSeq { get; set; }
+    public long Count { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+}
 
+public sealed class ProjectEpochEnvelope
+{
+    public Guid RotationId { get; set; }
+    public long Index { get; set; }
+    public long SenderSeq { get; set; }
+    public byte[] Payload { get; set; } = [];
+}
 
+public sealed class ProjectEpochKeyGrant
+{
+    public Guid ProjectId { get; set; }
+    public Guid DeviceId { get; set; }
+    public long Epoch { get; set; }
+    public long FirstServerSeq { get; set; }
+    public Guid GrantorDeviceId { get; set; }
+    public byte[] Payload { get; set; } = [];
+}
 
+public sealed class ProjectEpochDeviceGrant
+{
+    public Guid RotationId { get; set; }
+    public Guid DeviceId { get; set; }
+    public byte[] Certificate { get; set; } = [];
+    public byte[] Payload { get; set; } = [];
+}

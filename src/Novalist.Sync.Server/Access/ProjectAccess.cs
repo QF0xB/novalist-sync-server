@@ -80,6 +80,9 @@ public sealed partial class ProjectAccess(SyncDbContext db, AccessDeliveryGate d
         await using var transaction = await AccountAccessLock.AcquireAsync(db, memberId, legacyAccount: false, cancellationToken);
         await db.Projects.FromSqlInterpolated($"SELECT * FROM projects WHERE id = {projectId} FOR UPDATE").ToListAsync(cancellationToken);
         await EnsureIsOwnerAsync(ownerId, projectId, cancellationToken);
+        if (await db.ProjectDeviceAuthorizations.AnyAsync(value => value.ProjectId == projectId &&
+            db.Devices.Any(device => device.Id == value.DeviceId && device.UserId == memberId), cancellationToken))
+            throw new ConflictException("Rotate the project encryption keys when removing a registered collaborator.");
 
         var removed = await db.Memberships
             .Where(m => m.ProjectId == projectId && m.UserId == memberId)
@@ -88,6 +91,8 @@ public sealed partial class ProjectAccess(SyncDbContext db, AccessDeliveryGate d
         await db.Invitations.Where(invitation => invitation.ProjectId == projectId &&
             (invitation.RedeemedBy == null || invitation.RedeemedBy == memberId))
             .ExecuteUpdateAsync(set => set.SetProperty(invitation => invitation.ExpiresAt, DateTimeOffset.UnixEpoch), cancellationToken);
+        var deviceIds = db.Devices.Where(device => device.UserId == memberId).Select(device => device.Id);
+        await db.FieldLeases.Where(lease => lease.ProjectId == projectId && deviceIds.Contains(lease.DeviceId)).ExecuteDeleteAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         if (onRemoved is not null) await onRemoved();
         return true;

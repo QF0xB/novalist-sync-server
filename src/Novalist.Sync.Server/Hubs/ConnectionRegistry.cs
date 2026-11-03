@@ -59,6 +59,17 @@ public sealed class ConnectionRegistry
             connection.Projects.TryRemove(new(projectId, ProjectConnectionState.Joined));
     }
 
+    public IReadOnlyList<PresenceTarget> PresenceTargets(Guid projectId, string sender, int limit) =>
+        _connections.Select(pair => pair.Value).Where(connection => connection.Context.ConnectionId != sender &&
+            connection.Projects.TryGetValue(projectId, out var state) && state == ProjectConnectionState.Joined)
+            .Take(limit).Select(connection => new PresenceTarget(connection.Context.ConnectionId, connection.DeviceId)).ToArray();
+
+    public IReadOnlyList<string> PresenceRecipients(Guid projectId, IReadOnlySet<Guid> activeDevices, IReadOnlyList<PresenceTarget> targets) =>
+        targets.Where(target => _connections.TryGetValue(target.ConnectionId, out var connection) &&
+            connection.DeviceId == target.DeviceId && activeDevices.Contains(target.DeviceId) &&
+            connection.Projects.TryGetValue(projectId, out var state) && state == ProjectConnectionState.Joined)
+            .Select(target => target.ConnectionId).ToArray();
+
     public bool ProjectRevoked(string connectionId, Guid projectId) =>
         !_connections.TryGetValue(connectionId, out var connection) ||
         connection.Projects.TryGetValue(projectId, out var state) && state == ProjectConnectionState.Revoked;
@@ -71,4 +82,4 @@ public sealed class ConnectionRegistry
     }
 }
 
-
+public sealed record PresenceTarget(string ConnectionId, Guid DeviceId);

@@ -13,9 +13,12 @@ public sealed partial class SyncHub(
     DeviceRegistry devices,
     DeviceProofServer proofs,
     ProjectAccess projects,
+    ProjectEpochAccess epochs,
     AccessRevocation revocation,
     InvitationAccess invitations,
     UpdateLog updateLog,
+    PresenceAccess presence,
+    FieldLeaseAccess fieldLeases,
     ConnectionRegistry connections,
     ILogger<SyncHub> logger) : Hub<ISyncClient>, ISyncHub
 {
@@ -147,6 +150,18 @@ public sealed partial class SyncHub(
         return serverSeq;
     }
 
+    public async Task PublishPresence(Envelope envelope)
+    {
+        await EnsureDeviceActiveAsync(Context.ConnectionAborted);
+        var project = (await presence.PreflightAsync(UserId, DeviceId, envelope, Context.ConnectionAborted)).ProjectId;
+        var targets = connections.PresenceTargets(project, Context.ConnectionId, PresenceAccess.MaximumRecipients + 1);
+        if (targets.Count > PresenceAccess.MaximumRecipients)
+            throw new PushRejectedException("Presence is limited to 256 active recipients per message.");
+        await presence.DeliverAsync(UserId, DeviceId, envelope, targets.Select(target => target.DeviceId).ToHashSet(), (projectId, activeDevices, cancellationToken) =>
+            ((Hub)this).Clients.Clients(connections.PresenceRecipients(projectId, activeDevices, targets))
+                .SendCoreAsync(nameof(ISyncClient.ReceivePresence), [envelope], cancellationToken),
+            Context.ConnectionAborted);
+    }
 
     public async IAsyncEnumerable<SequencedEnvelope> CatchUp(Guid projectId, long afterServerSeq, [EnumeratorCancellation] CancellationToken cancellationToken)
     {

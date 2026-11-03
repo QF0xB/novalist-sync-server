@@ -582,6 +582,32 @@ remember verified keys and **warn loudly** when a known user's keys change.
 Cursors, selections and "is in scene X" are encoded by the Yjs host (relative
 positions), sealed with `K_presence` by .NET, broadcast, never stored.
 
+`PublishPresence(Envelope)` relays to other connected project members through
+`ReceivePresence`. It checks the active device, current membership and epoch,
+message type, sender identity and envelope sizes. The ciphertext is limited
+to 4096 bytes. Presence never increments `serverSeq` or appears in catch-up.
+Clients throttle outgoing updates, reject stale/replayed presence and expire
+inactive cursors locally. The server does not interpret the encrypted state.
+
+Malformed, stale-epoch and unauthorized presence is rejected before recipient
+counting and delivery coordination. Transient sender sequences use the full
+nonzero unsigned 64-bit range because presence is never stored.
+Membership, epoch and active devices are rechecked under process-local account
+gates (in UUID order), then the project gate shared with access changes.
+Delivery holds no database transaction or row locks. Database writes can proceed
+while network delivery is pending; hub pushes wait for the bounded delivery
+barrier before appending and broadcasting.
+Each message snapshots at most 256 joined recipient connections, and takes
+account gates only for active candidate recipients and the sender. Presence is rejected
+explicitly above that fan-out limit; project editing remains available. Delivery
+targets only captured connections that still belong to the project, after
+checking membership and active devices again under the gates.
+The send has a one-second cancellation deadline passed into SignalR's outbound
+write. Access changes wait for an in-flight send to finish, then later sends
+exclude removed or revoked recipients. A timeout reports `Presence delivery
+timed out.`; clients may send their next fresh presence state. These gates share
+the existing single-instance restriction of connection revocation (§13).
+
 ### 8.9 Pausing and resuming
 
 - **Pause:** .NET closes the SignalR connection and stops sending. The project
@@ -646,22 +672,106 @@ MIME types and keys are only visible inside the encrypted manifest.
 | `projects`     | projectId, current epoch, epoch start time                     | yes              |
 | `memberships`  | projectId, userId, role (owner, contributor, viewer)           | yes              |
 | `invitations` | invitationId, projectId, expiry, claimant account/device, opaque certificate fingerprint | metadata; no keys |
+| `field_leases` | projectId, opaque resourceId, holder deviceId, leaseId, epoch, expiry | metadata; no field names or values |
+| `field_lease_attempts` | projectId, deviceId, attempted leaseId, acquisition deadline | temporary metadata |
+| `project_device_authorizations` | projectId, deviceId, epoch, public certificate | public certificate only |
+| `project_epoch_stages` | rotationId, projectId, initiating deviceId, prior epoch/sequence, count, creation time | yes |
+| `project_epoch_envelopes` | rotationId, index, senderSeq, opaque checkpoint envelope | envelope header only |
+| `project_epoch_device_grants` | rotationId, recipient deviceId, public certificate, opaque staged grant | metadata; no keys |
+| `project_epoch_key_grants` | projectId, recipient/grantor deviceIds, epoch, first serverSeq, opaque grant | metadata; no keys |
 | `wrapped_keys` | §6.3 records                                                   | no               |
 | `updates`      | serverSeq, header, nonce, ciphertext, signature                | header only      |
 | `snapshots`    | coversServerSeq, timestamp, envelope                           | header only      |
 | `blob_chunks`  | blobId, index, ciphertext                                      | no               |
 
 Visible metadata: project and item counts, member lists, devices, timestamps,
-edit frequency per item, sizes, invitation expiry and claimant identities.
+edit frequency per item, sizes, invitation expiry and claimant identities,
+opaque field-focus identifiers and timing, and epoch-transition boundaries.
 
 Verified owner connections can list project members using `ListProjectMembers`.
 The response contains the existing account UUID, the stable string role
 (`Owner`, `Contributor` or `Viewer`) and username (or verified
 email when no nonblank username exists, otherwise the account UUID).
-`RemoveProjectMember` removes access and expires all unused project invitations.
-`DeleteProject` removes memberships, invitations and updates;
+`RemoveProjectMember` removes access and the
+account's field leases and expires all unused project invitations.
+`DeleteProject` removes memberships, invitations, updates and field lease data;
 the empty project row remains as an identifier tombstone. Both operations remove
 affected connections from live delivery and send `ProjectAccessEnded(projectId)`.
+Registered encrypted projects require `CommitProjectEpoch` for member removal.
+Members with no registered project device can be removed directly. Epoch
+commits lock the initiator and removed account in database UUID order, then
+revalidate the initiating device before changing keys. The delivery barrier
+remains held through post-commit connection revocation, which finishes even
+when the initiating connection disconnects.
+Clients register their public project certificate; contributor registration must
+match the certificate fingerprint atomically bound during invitation activation.
+The server exposes registered certificate bytes and account/device IDs to the
+owner, who validates the device's receiving key against the existing project
+authority before wrapping a new random epoch key.
+
+Epoch transitions reserve a stable update boundary before clients catch up and
+construct the new checkpoint. `ReserveProjectEpoch` returns that boundary and
+fences new old-epoch writes for up to two minutes; confirmed update retries still
+return their original sequence. One reservation may be active per project.
+`CancelProjectEpoch` releases an abandoned reservation, and periodic cleanup
+deletes expired staging data. Clients cancel on failure and retry from a fresh
+reservation if the deadline expires. Transitions then stage opaque checkpoint
+envelopes and individual opaque grants.
+The database atomically compares the previous epoch and last committed sequence,
+assigns checkpoint sequences through the normal log allocator, removes the chosen
+membership, retires all invitations, clears leases and publishes grants only to
+remaining registered devices. Members without a registered, authorized device
+do not block removal and receive no key grant until an owner authorizes their
+device. The commit still checks the reserved epoch and sequence atomically. Devices
+receive `ProjectEpochChanged` and restart against the owner-signed checkpoint
+boundary. Public metadata adds rotation IDs, device certificates, previous epochs,
+checkpoint boundary sequences, envelope/grant sizes and staging timestamps.
+The server never decrypts grants or checkpoint envelopes; clients verify the
+signature, pinned owner, recipient, monotonic epoch and checkpoint hash.
+
+Field editing adds `field_leases`: project UUID, opaque resource UUID, holder
+device UUID, random lease UUID, epoch and expiry. The resource UUID identifies a
+client-defined field without disclosing its name, path or value. The server learns
+when the same field is focused and by which device. `AcquireFieldLease`,
+`RenewFieldLease` and `ReleaseFieldLease` require current write access and device
+authentication. A grant lasts 30 seconds; renewal requires the same live lease.
+Expired/released focus needs a fresh lease UUID. Acquisition also returns the
+server clock and the project's latest sequence, which the client must catch up
+through before enabling editing. A new request includes a fixed `AcquireBefore`
+deadline no more than two minutes ahead, preserved on retries. Verified clients
+obtain the database clock through `GetFieldLeaseTime` before creating that
+deadline, so an inaccurate device clock cannot prevent acquisition. This exposes
+server time, not additional user or project data. Expired requests
+cannot acquire a lease. `field_lease_attempts` retains project/device/lease UUIDs
+only until that deadline, including denied attempts and releases received before
+acquisition, so delayed requests cannot resurrect an earlier focus after cleanup.
+This fences retries of the original request. A new attempt must use a fresh
+lease UUID and deadline. Changing the deadline alone cannot bypass a retained
+attempt. After retention expires, the original deadline still rejects an old
+request; the server does not keep permanent lease-UUID history.
+Renewal, editing, and release of an existing lease do not require an acquisition
+deadline. Cancellation received before acquisition must supply the original
+deadline so the server can retain its replay barrier until that time.
+There are at most 256 retained attempts per device and project; excess requests
+fail explicitly. Cleanup runs every minute and on field operations. A retry of a
+still-live lease returns its current grant. Field operations take a shared account
+lock to protect device cutover, allowing edits in independent projects to proceed
+concurrently. `PushFieldEdit` atomically validates the lease
+and persists an opaque encrypted update. Clients flush before releasing focus;
+late edits after expiry are rejected. Identical already-persisted retries return
+their original sequence. A lost connection leaves a bounded lease, and a new
+epoch invalidates old leases. This supplements encrypted document merging; the
+server does not interpret field values or enforce their internal schema.
+
+`PushGuardedFieldEdit` additionally requires a second live lease owned by the
+same authenticated device in the same project and epoch. Both leases are checked
+inside the transaction that allocates the update sequence. This fences dependent
+edits if a client pauses until its coordinating lease expires. The server learns
+that two opaque resources participate in one change, without their names or
+values. Identical confirmed retries remain idempotent. Clients use this distinct
+method so servers that lack support reject the operation rather than ignore its
+precondition.
+
 Device authentication adds immutable 32-byte Ed25519 and X25519 public keys to
 device records, plus the linking device ID and its public signature when linked.
 `GET /devices/registration` returns the authenticated account's internal user
@@ -716,7 +826,7 @@ verified owner's member list. Only verified email claims are stored.
 
 OIDC authenticates the **user**, not the device. Verified devices additionally
 answer a fresh `GetDeviceChallenge` using `AuthenticateDevice` before project,
-update or invitation operations. Public keys cannot be replaced under
+update, presence or invitation operations. Public keys cannot be replaced under
 an existing device ID or reused under another ID, including revoked records.
 Linked device records reference their authorizing device. The first verified registration serializes on the account
 and requires fresh MFA bound to both ordinary and recovery public-key records.

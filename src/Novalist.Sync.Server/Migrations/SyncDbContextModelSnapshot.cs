@@ -69,6 +69,71 @@ namespace Novalist.Sync.Server.Migrations
                     b.ToTable("devices", (string)null);
                 });
 
+            modelBuilder.Entity("Novalist.Sync.Server.Data.FieldLease", b =>
+                {
+                    b.Property<Guid>("ProjectId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("project_id");
+
+                    b.Property<Guid>("ResourceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("resource_id");
+
+                    b.Property<Guid>("DeviceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("device_id");
+
+                    b.Property<long>("Epoch")
+                        .HasColumnType("bigint")
+                        .HasColumnName("epoch");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expires_at");
+
+                    b.Property<Guid>("LeaseId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("lease_id");
+
+                    b.HasKey("ProjectId", "ResourceId")
+                        .HasName("pk_field_leases");
+
+                    b.HasIndex("DeviceId")
+                        .HasDatabaseName("ix_field_leases_device_id");
+
+                    b.ToTable("field_leases", (string)null);
+                });
+
+            modelBuilder.Entity("Novalist.Sync.Server.Data.FieldLeaseAttempt", b =>
+                {
+                    b.Property<Guid>("ProjectId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("project_id");
+
+                    b.Property<Guid>("DeviceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("device_id");
+
+                    b.Property<Guid>("LeaseId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("lease_id");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expires_at");
+
+                    b.HasKey("ProjectId", "DeviceId", "LeaseId")
+                        .HasName("pk_field_lease_attempts");
+
+                    b.HasIndex("DeviceId")
+                        .HasDatabaseName("ix_field_lease_attempts_device_id");
+
+                    b.HasIndex("ExpiresAt")
+                        .HasDatabaseName("ix_field_lease_attempts_expires_at");
+
+                    b.ToTable("field_lease_attempts", (string)null);
+                });
+
             modelBuilder.Entity("Novalist.Sync.Server.Data.Invitation", b =>
                 {
                     b.Property<Guid>("Id")
@@ -159,6 +224,163 @@ namespace Novalist.Sync.Server.Migrations
                         .HasName("pk_projects");
 
                     b.ToTable("projects", (string)null);
+                });
+
+            modelBuilder.Entity("Novalist.Sync.Server.Data.ProjectDeviceAuthorization", b =>
+                {
+                    b.Property<Guid>("ProjectId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("project_id");
+
+                    b.Property<Guid>("DeviceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("device_id");
+
+                    b.Property<byte[]>("Certificate")
+                        .IsRequired()
+                        .HasColumnType("bytea")
+                        .HasColumnName("certificate");
+
+                    b.Property<long>("Epoch")
+                        .HasColumnType("bigint")
+                        .HasColumnName("epoch");
+
+                    b.HasKey("ProjectId", "DeviceId")
+                        .HasName("pk_project_device_authorizations");
+
+                    b.HasIndex("DeviceId")
+                        .HasDatabaseName("ix_project_device_authorizations_device_id");
+
+                    b.ToTable("project_device_authorizations", (string)null);
+                });
+
+            modelBuilder.Entity("Novalist.Sync.Server.Data.ProjectEpochDeviceGrant", b =>
+                {
+                    b.Property<Guid>("RotationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("rotation_id");
+
+                    b.Property<Guid>("DeviceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("device_id");
+
+                    b.Property<byte[]>("Certificate")
+                        .IsRequired()
+                        .HasColumnType("bytea")
+                        .HasColumnName("certificate");
+
+                    b.Property<byte[]>("Payload")
+                        .IsRequired()
+                        .HasColumnType("bytea")
+                        .HasColumnName("payload");
+
+                    b.HasKey("RotationId", "DeviceId")
+                        .HasName("pk_project_epoch_device_grants");
+
+                    b.ToTable("project_epoch_device_grants", (string)null);
+                });
+
+            modelBuilder.Entity("Novalist.Sync.Server.Data.ProjectEpochEnvelope", b =>
+                {
+                    b.Property<Guid>("RotationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("rotation_id");
+
+                    b.Property<long>("Index")
+                        .HasColumnType("bigint")
+                        .HasColumnName("index");
+
+                    b.Property<byte[]>("Payload")
+                        .IsRequired()
+                        .HasColumnType("bytea")
+                        .HasColumnName("payload");
+
+                    b.Property<long>("SenderSeq")
+                        .HasColumnType("bigint")
+                        .HasColumnName("sender_seq");
+
+                    b.HasKey("RotationId", "Index")
+                        .HasName("pk_project_epoch_envelopes");
+
+                    b.HasIndex("RotationId", "SenderSeq")
+                        .IsUnique()
+                        .HasDatabaseName("ix_project_epoch_envelopes_rotation_id_sender_seq");
+
+                    b.ToTable("project_epoch_envelopes", (string)null);
+                });
+
+            modelBuilder.Entity("Novalist.Sync.Server.Data.ProjectEpochKeyGrant", b =>
+                {
+                    b.Property<Guid>("ProjectId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("project_id");
+
+                    b.Property<Guid>("DeviceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("device_id");
+
+                    b.Property<long>("Epoch")
+                        .HasColumnType("bigint")
+                        .HasColumnName("epoch");
+
+                    b.Property<long>("FirstServerSeq")
+                        .HasColumnType("bigint")
+                        .HasColumnName("first_server_seq");
+
+                    b.Property<Guid>("GrantorDeviceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("grantor_device_id");
+
+                    b.Property<byte[]>("Payload")
+                        .IsRequired()
+                        .HasColumnType("bytea")
+                        .HasColumnName("payload");
+
+                    b.HasKey("ProjectId", "DeviceId", "Epoch")
+                        .HasName("pk_project_epoch_key_grants");
+
+                    b.ToTable("project_epoch_key_grants", (string)null);
+                });
+
+            modelBuilder.Entity("Novalist.Sync.Server.Data.ProjectEpochStage", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<long>("Count")
+                        .HasColumnType("bigint")
+                        .HasColumnName("count");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid>("DeviceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("device_id");
+
+                    b.Property<long>("PreviousEpoch")
+                        .HasColumnType("bigint")
+                        .HasColumnName("previous_epoch");
+
+                    b.Property<long>("PreviousServerSeq")
+                        .HasColumnType("bigint")
+                        .HasColumnName("previous_server_seq");
+
+                    b.Property<Guid>("ProjectId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("project_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_project_epoch_stages");
+
+                    b.HasIndex("ProjectId")
+                        .HasDatabaseName("ix_project_epoch_stages_project_id");
+
+                    b.HasIndex("CreatedAt").HasDatabaseName("ix_project_epoch_stages_created_at");
+
+                    b.ToTable("project_epoch_stages", (string)null);
                 });
 
             modelBuilder.Entity("Novalist.Sync.Server.Data.StoredUpdate", b =>
@@ -274,6 +496,40 @@ namespace Novalist.Sync.Server.Migrations
                         .OnDelete(DeleteBehavior.Restrict).HasConstraintName("fk_devices_devices_linked_by_device_id");
                 });
 
+            modelBuilder.Entity("Novalist.Sync.Server.Data.FieldLease", b =>
+                {
+                    b.HasOne("Novalist.Sync.Server.Data.Device", null)
+                        .WithMany()
+                        .HasForeignKey("DeviceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_field_leases_devices_device_id");
+
+                    b.HasOne("Novalist.Sync.Server.Data.Project", null)
+                        .WithMany()
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_field_leases_projects_project_id");
+                });
+
+            modelBuilder.Entity("Novalist.Sync.Server.Data.FieldLeaseAttempt", b =>
+                {
+                    b.HasOne("Novalist.Sync.Server.Data.Device", null)
+                        .WithMany()
+                        .HasForeignKey("DeviceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_field_lease_attempts_devices_device_id");
+
+                    b.HasOne("Novalist.Sync.Server.Data.Project", null)
+                        .WithMany()
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_field_lease_attempts_projects_project_id");
+                });
+
             modelBuilder.Entity("Novalist.Sync.Server.Data.Invitation", b =>
                 {
                     b.HasOne("Novalist.Sync.Server.Data.Device", null)
@@ -311,6 +567,63 @@ namespace Novalist.Sync.Server.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_memberships_users_user_id");
+                });
+
+            modelBuilder.Entity("Novalist.Sync.Server.Data.ProjectDeviceAuthorization", b =>
+                {
+                    b.HasOne("Novalist.Sync.Server.Data.Device", null)
+                        .WithMany()
+                        .HasForeignKey("DeviceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_project_device_authorizations_devices_device_id");
+
+                    b.HasOne("Novalist.Sync.Server.Data.Project", null)
+                        .WithMany()
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_project_device_authorizations_projects_project_id");
+                });
+
+            modelBuilder.Entity("Novalist.Sync.Server.Data.ProjectEpochDeviceGrant", b =>
+                {
+                    b.HasOne("Novalist.Sync.Server.Data.ProjectEpochStage", null)
+                        .WithMany()
+                        .HasForeignKey("RotationId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_project_epoch_device_grants_project_epoch_stages_rotation_id");
+                });
+
+            modelBuilder.Entity("Novalist.Sync.Server.Data.ProjectEpochEnvelope", b =>
+                {
+                    b.HasOne("Novalist.Sync.Server.Data.ProjectEpochStage", null)
+                        .WithMany()
+                        .HasForeignKey("RotationId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_project_epoch_envelopes_project_epoch_stages_rotation_id");
+                });
+
+            modelBuilder.Entity("Novalist.Sync.Server.Data.ProjectEpochKeyGrant", b =>
+                {
+                    b.HasOne("Novalist.Sync.Server.Data.Project", null)
+                        .WithMany()
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_project_epoch_key_grants_projects_project_id");
+                });
+
+            modelBuilder.Entity("Novalist.Sync.Server.Data.ProjectEpochStage", b =>
+                {
+                    b.HasOne("Novalist.Sync.Server.Data.Project", null)
+                        .WithMany()
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_project_epoch_stages_projects_project_id");
                 });
 
             modelBuilder.Entity("Novalist.Sync.Server.Data.StoredUpdate", b =>

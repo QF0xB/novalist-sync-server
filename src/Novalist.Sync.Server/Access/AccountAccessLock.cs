@@ -6,6 +6,20 @@ namespace Novalist.Sync.Server.Access;
 
 internal static class AccountAccessLock
 {
+    public static async Task<IDbContextTransaction> AcquireManyAsync(SyncDbContext db, IEnumerable<Guid> users, CancellationToken ct)
+    {
+        var ids = users.Distinct().Order().ToArray();
+        var transaction = await db.Database.BeginTransactionAsync(ct);
+        try
+        {
+            var locked = await db.Users.FromSqlInterpolated(
+                $"SELECT * FROM users WHERE id = ANY({ids}) ORDER BY id FOR UPDATE").ToListAsync(ct);
+            if (locked.Count != ids.Length) throw new AccessDeniedException("An authenticated account is unavailable.");
+            return transaction;
+        }
+        catch { await transaction.DisposeAsync(); throw; }
+    }
+
     public static async Task<IDbContextTransaction> AcquireAsync(SyncDbContext db, Guid userId, bool legacyAccount, CancellationToken ct, bool shared = false)
     {
         var transaction = await db.Database.BeginTransactionAsync(ct);

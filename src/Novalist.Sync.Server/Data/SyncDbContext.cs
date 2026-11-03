@@ -10,9 +10,45 @@ public sealed class SyncDbContext(DbContextOptions<SyncDbContext> options) : DbC
     public DbSet<Membership> Memberships => Set<Membership>();
     public DbSet<StoredUpdate> Updates => Set<StoredUpdate>();
     public DbSet<Invitation> Invitations => Set<Invitation>();
+    public DbSet<FieldLease> FieldLeases => Set<FieldLease>();
+    public DbSet<FieldLeaseAttempt> FieldLeaseAttempts => Set<FieldLeaseAttempt>();
+    public DbSet<ProjectDeviceAuthorization> ProjectDeviceAuthorizations => Set<ProjectDeviceAuthorization>();
+    public DbSet<ProjectEpochStage> ProjectEpochStages => Set<ProjectEpochStage>();
+    public DbSet<ProjectEpochEnvelope> ProjectEpochEnvelopes => Set<ProjectEpochEnvelope>();
+    public DbSet<ProjectEpochKeyGrant> ProjectEpochKeyGrants => Set<ProjectEpochKeyGrant>();
+    public DbSet<ProjectEpochDeviceGrant> ProjectEpochDeviceGrants => Set<ProjectEpochDeviceGrant>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        modelBuilder.Entity<ProjectEpochDeviceGrant>(entry =>
+        {
+            entry.HasKey(value => new { value.RotationId, value.DeviceId });
+            entry.HasOne<ProjectEpochStage>().WithMany().HasForeignKey(value => value.RotationId);
+        });
+        modelBuilder.Entity<ProjectDeviceAuthorization>(entry =>
+        {
+            entry.HasKey(value => new { value.ProjectId, value.DeviceId });
+            entry.HasOne<Project>().WithMany().HasForeignKey(value => value.ProjectId);
+            entry.HasOne<Device>().WithMany().HasForeignKey(value => value.DeviceId).OnDelete(DeleteBehavior.Restrict);
+        });
+        modelBuilder.Entity<ProjectEpochStage>(entry =>
+        {
+            entry.HasIndex(value => value.CreatedAt);
+            entry.Property(value => value.Id).ValueGeneratedNever();
+            entry.HasOne<Project>().WithMany().HasForeignKey(value => value.ProjectId);
+        });
+        modelBuilder.Entity<ProjectEpochEnvelope>(entry =>
+        {
+            entry.HasKey(value => new { value.RotationId, value.Index });
+            entry.HasIndex(value => new { value.RotationId, value.SenderSeq }).IsUnique();
+            entry.HasOne<ProjectEpochStage>().WithMany().HasForeignKey(value => value.RotationId);
+        });
+        modelBuilder.Entity<ProjectEpochKeyGrant>(entry =>
+        {
+            entry.HasKey(value => new { value.ProjectId, value.DeviceId, value.Epoch });
+            entry.HasOne<Project>().WithMany().HasForeignKey(value => value.ProjectId);
+        });
+        ConfigureFieldLeases(modelBuilder);
         modelBuilder.Entity<User>(user =>
         {
             user.Property(u => u.Id).ValueGeneratedNever();
@@ -58,6 +94,23 @@ public sealed class SyncDbContext(DbContextOptions<SyncDbContext> options) : DbC
                 .OnDelete(DeleteBehavior.Restrict);
             invitation.HasOne<Device>().WithMany().HasForeignKey(i => i.ActivatedDeviceId)
                 .OnDelete(DeleteBehavior.Restrict);
+        });
+    }
+
+    private static void ConfigureFieldLeases(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<FieldLeaseAttempt>(attempt =>
+        {
+            attempt.HasKey(value => new { value.ProjectId, value.DeviceId, value.LeaseId });
+            attempt.HasIndex(value => value.ExpiresAt);
+            attempt.HasOne<Project>().WithMany().HasForeignKey(value => value.ProjectId);
+            attempt.HasOne<Device>().WithMany().HasForeignKey(value => value.DeviceId).OnDelete(DeleteBehavior.Restrict);
+        });
+        modelBuilder.Entity<FieldLease>(lease =>
+        {
+            lease.HasKey(value => new { value.ProjectId, value.ResourceId });
+            lease.HasOne<Project>().WithMany().HasForeignKey(value => value.ProjectId);
+            lease.HasOne<Device>().WithMany().HasForeignKey(value => value.DeviceId).OnDelete(DeleteBehavior.Restrict);
         });
     }
 }

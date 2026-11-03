@@ -77,6 +77,28 @@ public class UpdateLogTests(DatabaseFixture database)
     }
 
     [Fact]
+    public async Task Append_RetryAfterRotationKeepsItsSequenceAndNewStaleWritesExplainTheEpoch()
+    {
+        var (projectId, deviceId, userId) = await SeedProjectAsync();
+        await using var db = database.CreateContext();
+        var log = new UpdateLog(db);
+        var envelope = CreateEnvelope(projectId, deviceId, 1);
+        Assert.Equal(1, await log.AppendAsync(userId, envelope, Ct));
+        await db.Projects.Where(project => project.Id == projectId)
+            .ExecuteUpdateAsync(set => set.SetProperty(project => project.CurrentEpoch, 1), Ct);
+
+        Assert.Equal(1, await log.AppendAsync(userId, envelope, Ct));
+        var rejected = await Assert.ThrowsAsync<PushRejectedException>(() => log.AppendAsync(userId, CreateEnvelope(projectId, deviceId, 2), Ct));
+        Assert.Contains("epoch", rejected.Message);
+        Assert.Equal(1, await db.Projects.Where(project => project.Id == projectId).Select(project => project.LastServerSeq).SingleAsync(Ct));
+        var retained = Assert.Single(await db.Updates.Where(update => update.ProjectId == projectId).ToListAsync(Ct));
+        Assert.Equal(envelope.Ciphertext, retained.Ciphertext);
+        Assert.Equal(1, retained.SenderSeq);
+        await db.Memberships.Where(member => member.ProjectId == projectId && member.UserId == userId).ExecuteDeleteAsync(Ct);
+        await Assert.ThrowsAsync<PushRejectedException>(() => log.AppendAsync(userId, envelope, Ct));
+    }
+
+    [Fact]
     public async Task Append_ReusedSenderSeqWithDifferentBytes_IsRejectedWithoutGap()
     {
         var (projectId, deviceId, userId) = await SeedProjectAsync();
