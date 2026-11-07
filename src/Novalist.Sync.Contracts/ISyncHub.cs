@@ -2,6 +2,16 @@ namespace Novalist.Sync.Contracts;
 
 public interface ISyncHub
 {
+    Task<ProjectEpochStatus> GetProjectEpoch(Guid projectId);
+    Task RegisterProjectDevice(Guid projectId, uint epoch, byte[] certificate);
+    Task<IReadOnlyList<ProjectDevice>> ListProjectDevices(Guid projectId);
+    Task BeginProjectEpoch(BeginProjectEpoch request);
+    Task<ProjectEpochStatus> ReserveProjectEpoch(Guid projectId, Guid rotationId);
+    Task CancelProjectEpoch(Guid rotationId);
+    Task<long> StageProjectEpoch(Guid rotationId, Envelope envelope);
+    Task StageProjectEpochGrant(Guid rotationId, ProjectEpochGrant grant);
+    Task CommitProjectEpoch(CommitProjectEpoch request);
+    Task<StoredProjectEpochGrant?> GetProjectEpochGrant(Guid projectId, uint afterEpoch);
     Task<IReadOnlyList<ProjectMember>> ListProjectMembers(Guid projectId);
     Task RemoveProjectMember(Guid projectId, Guid memberId);
     Task DeleteProject(Guid projectId);

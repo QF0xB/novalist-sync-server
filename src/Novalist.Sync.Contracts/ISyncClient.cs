@@ -2,6 +2,7 @@ namespace Novalist.Sync.Contracts;
 
 public interface ISyncClient
 {
+    Task ProjectEpochChanged(Guid projectId, uint epoch);
     Task ProjectAccessEnded(Guid projectId);
     Task ReceiveUpdate(SequencedEnvelope envelope);
     Task ReceivePresence(Envelope envelope);

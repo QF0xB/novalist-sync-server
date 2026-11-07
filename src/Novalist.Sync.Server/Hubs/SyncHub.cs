@@ -13,6 +13,7 @@ public sealed partial class SyncHub(
     DeviceRegistry devices,
     DeviceProofServer proofs,
     ProjectAccess projects,
+    ProjectEpochAccess epochs,
     AccessRevocation revocation,
     InvitationAccess invitations,
     UpdateLog updateLog,

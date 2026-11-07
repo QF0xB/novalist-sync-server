@@ -672,13 +672,18 @@ MIME types and keys are only visible inside the encrypted manifest.
 | `projects`     | projectId, current epoch, epoch start time                     | yes              |
 | `memberships`  | projectId, userId, role (owner, contributor, viewer)           | yes              |
 | `invitations` | invitationId, projectId, expiry, claimant account/device, opaque certificate fingerprint | metadata; no keys |
+| `project_device_authorizations` | projectId, deviceId, epoch, public certificate | public certificate only |
+| `project_epoch_stages` | rotationId, projectId, initiating deviceId, prior epoch/sequence, count, creation time | yes |
+| `project_epoch_envelopes` | rotationId, index, senderSeq, opaque checkpoint envelope | envelope header only |
+| `project_epoch_device_grants` | rotationId, recipient deviceId, public certificate, opaque staged grant | metadata; no keys |
+| `project_epoch_key_grants` | projectId, recipient/grantor deviceIds, epoch, first serverSeq, opaque grant | metadata; no keys |
 | `wrapped_keys` | §6.3 records                                                   | no               |
 | `updates`      | serverSeq, header, nonce, ciphertext, signature                | header only      |
 | `snapshots`    | coversServerSeq, timestamp, envelope                           | header only      |
 | `blob_chunks`  | blobId, index, ciphertext                                      | no               |
 
 Visible metadata: project and item counts, member lists, devices, timestamps,
-edit frequency per item, sizes, invitation expiry and claimant identities.
+edit frequency per item, sizes, invitation expiry and claimant identities, epoch-transition boundaries.
 
 Verified owner connections can list project members using `ListProjectMembers`.
 The response contains the existing account UUID, the stable string role
@@ -688,6 +693,38 @@ email when no nonblank username exists, otherwise the account UUID).
 `DeleteProject` removes memberships, invitations and updates;
 the empty project row remains as an identifier tombstone. Both operations remove
 affected connections from live delivery and send `ProjectAccessEnded(projectId)`.
+Registered encrypted projects require `CommitProjectEpoch` for member removal.
+Members with no registered project device can be removed directly. Epoch
+commits lock the initiator and removed account in database UUID order, then
+revalidate the initiating device before changing keys. The delivery barrier
+remains held through post-commit connection revocation, which finishes even
+when the initiating connection disconnects.
+Clients register their public project certificate; contributor registration must
+match the certificate fingerprint atomically bound during invitation activation.
+The server exposes registered certificate bytes and account/device IDs to the
+owner, who validates the device's receiving key against the existing project
+authority before wrapping a new random epoch key.
+
+Epoch transitions reserve a stable update boundary before clients catch up and
+construct the new checkpoint. `ReserveProjectEpoch` returns that boundary and
+fences new old-epoch writes for up to two minutes; confirmed update retries still
+return their original sequence. One reservation may be active per project.
+`CancelProjectEpoch` releases an abandoned reservation, and periodic cleanup
+deletes expired staging data. Clients cancel on failure and retry from a fresh
+reservation if the deadline expires. Transitions then stage opaque checkpoint
+envelopes and individual opaque grants.
+The database atomically compares the previous epoch and last committed sequence,
+assigns checkpoint sequences through the normal log allocator, removes the chosen
+membership, retires all invitations and publishes grants only to
+remaining registered devices. Members without a registered, authorized device
+do not block removal and receive no key grant until an owner authorizes their
+device. The commit still checks the reserved epoch and sequence atomically. Devices
+receive `ProjectEpochChanged` and restart against the owner-signed checkpoint
+boundary. Public metadata adds rotation IDs, device certificates, previous epochs,
+checkpoint boundary sequences, envelope/grant sizes and staging timestamps.
+The server never decrypts grants or checkpoint envelopes; clients verify the
+signature, pinned owner, recipient, monotonic epoch and checkpoint hash.
+
 Device authentication adds immutable 32-byte Ed25519 and X25519 public keys to
 device records, plus the linking device ID and its public signature when linked.
 `GET /devices/registration` returns the authenticated account's internal user

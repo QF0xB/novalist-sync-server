@@ -10,6 +10,8 @@ the minor version.
 
 ### Added
 
+- Contracts 1.6.0: Epoch rotation: verified project-device certificates, staged checkpoints and opaque key grants, reservations, cancellation, compare-and-set commit, and `ProjectEpochChanged`. New methods and records are additive.
+
 - Contracts 1.5.0: Presence: transient encrypted `PublishPresence` and `ReceivePresence` messages. Delivery rechecks account, device and membership without persisting payloads or holding database locks across network sends.
 
 - Contracts 1.4.0: Membership management: owner-only member listing, removal and project deletion, stable role names, and `ProjectAccessEnded` notifications. New methods and records are additive.

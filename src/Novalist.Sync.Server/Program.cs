@@ -27,6 +27,8 @@ else
 
     builder.Services.AddScoped<UpdateLog>();
     builder.Services.AddScoped<PresenceAccess>();
+    builder.Services.AddScoped<EphemeralStateCleanup>();
+    builder.Services.AddHostedService<EphemeralStateCleanupService>();
 
     builder.Services.AddScoped<UserDirectory>();
     builder.Services.AddSingleton<AccessDeliveryGate>();
@@ -37,6 +39,7 @@ else
     builder.Services.AddSingleton<DeviceEnrollmentTokens>();
     builder.Services.AddScoped<VerifiedDeviceEnrollment>();
     builder.Services.AddScoped<ProjectAccess>();
+    builder.Services.AddScoped<ProjectEpochAccess>();
     builder.Services.AddScoped<InvitationAccess>();
     builder.Services.AddSingleton(TimeProvider.System);
     builder.Services.AddSingleton<ConnectionRegistry>();
